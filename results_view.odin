@@ -43,6 +43,8 @@ Results_Plot :: struct {
 	x_open, y_open, h_open, lat_open, lon_open: bool,
 	// Per-dropdown popup scroll offset (index into the column list).
 	x_scroll, y_scroll, h_scroll, lat_scroll, lon_scroll: int,
+	// Plot-selector dropdown popup state.
+	plot_open: bool,
 	bins: int, // histogram bin count (0 = auto)
 }
 
@@ -62,6 +64,12 @@ Results_State :: struct {
 	raw_col_scroll: f32,
 	raw_widths:    [dynamic]f32,
 	show_recents:  bool,
+	search_buf:    [256]u8,
+	search_len:    int,
+	search_edit:   bool,
+	// True for the frame a text input consumed Enter, so the file-browser
+	// keyboard navigation can't also act on that same keypress.
+	text_enter:    bool,
 	plot:          Results_Plot,
 	map_view:      Map_View,
 	map_bg:        Map_Background,
@@ -498,13 +506,78 @@ open_results_folder :: proc(app: ^App) {
 	cwd, _ := os.get_working_directory(context.temp_allocator)
 	results_set_root(app, cwd)
 	app.results.show_recents = false
-	app.view = .view_results
 	app.results.map_bg_init = false
 }
 
 open_recents_view :: proc(app: ^App) {
 	app.results.show_recents = true
-	app.view = .view_results
+}
+
+// Focuses the file-browser search box (Ctrl+F / "Find files").
+results_focus_search :: proc(app: ^App) {
+	rs := &app.results
+	rs.search_edit = true
+	rs.path_edit = false
+	rs.show_recents = false
+}
+
+// Reloads the selected datasets from disk so plots reflect changed files.
+results_reload_datasets :: proc(app: ^App) {
+	rs := &app.results
+	for ds in rs.datasets {
+		if ds != nil {
+			dataset_destroy(ds)
+			free(ds)
+		}
+	}
+	clear(&rs.datasets)
+	// results_sync_datasets reloads every path still in rs.selected.
+	results_sync_datasets(app)
+}
+
+// Ctrl+R / "Refresh plots": re-scan the folder and reload the selected data,
+// preserving the current selection across the rescan.
+results_refresh :: proc(app: ^App) {
+	rs := &app.results
+	selected_paths := make([dynamic]string, 0, len(rs.selected), context.temp_allocator)
+	for idx in rs.selected {
+		if idx >= 0 && idx < len(rs.entries) {
+			append(&selected_paths, strings.clone(rs.entries[idx].path, context.temp_allocator))
+		}
+	}
+	results_scan(app)
+	clear(&rs.selected)
+	for p in selected_paths {
+		for e, i in rs.entries {
+			if !e.is_dir && e.path == p {
+				append(&rs.selected, i)
+				break
+			}
+		}
+	}
+	results_reload_datasets(app)
+}
+
+// Global keyboard shortcuts for the results explorer (ignored while the
+// command palette is open). Ctrl+F focuses search, Ctrl+R refreshes, and
+// Ctrl+1..4 switch the active plot type.
+results_handle_shortcuts :: proc(app: ^App) {
+	if app.palette.open {
+		return
+	}
+	rs := &app.results
+	if ctrl_held() {
+		if rl.IsKeyPressed(.F) {
+			results_focus_search(app)
+		}
+		if rl.IsKeyPressed(.R) {
+			results_refresh(app)
+		}
+		if rl.IsKeyPressed(.ONE) {rs.plot.id = PLOT_MAP}
+		if rl.IsKeyPressed(.TWO) {rs.plot.id = PLOT_LINE}
+		if rl.IsKeyPressed(.THREE) {rs.plot.id = PLOT_HIST}
+		if rl.IsKeyPressed(.FOUR) {rs.plot.id = PLOT_HIST2D}
+	}
 }
 
 // --- palette recents submenu -------------------------------------------------
@@ -570,11 +643,18 @@ draw_results_view :: proc(app: ^App) {
 	sw := f32(rl.GetScreenWidth())
 	sh := f32(rl.GetScreenHeight())
 	rs := &app.results
+	rs.text_enter = false
+
+	results_handle_shortcuts(app)
+
+	// Discard queued characters while no text field is focused, so stale input
+	// can never be injected into a box the moment it is clicked.
+	if !app.palette.open && !rs.path_edit && !rs.search_edit {
+		for rl.GetCharPressed() != 0 {}
+	}
 
 	// --- top bar: path input + actions -------------------------------------
-	// Content must start below the clickable tab bar (drawn on top at the very
-	// top of the window).
-	top := view_tab_height * sc + 6 * sc
+	top := 6 * sc
 	bar_h := 44 * sc
 	path_rect := rl.Rectangle{12 * sc, top + 8 * sc, sw * 0.55, 30 * sc}
 	up_rect := rl.Rectangle{path_rect.x + path_rect.width + 6 * sc, top + 8 * sc, 64 * sc, 30 * sc}
@@ -589,6 +669,7 @@ draw_results_view :: proc(app: ^App) {
 		t,
 		sc,
 	) {
+		rs.text_enter = true
 		path := strings.trim_space(string(rs.path_buf[:rs.path_len]))
 		if len(path) > 0 {
 			results_open_path(app, path)
@@ -604,7 +685,7 @@ draw_results_view :: proc(app: ^App) {
 		rs.show_recents = true
 	}
 	if draw_button(refresh_rect, "Refresh", t, sc) {
-		results_scan(app)
+		results_refresh(app)
 	}
 
 	if rs.root != "" {
@@ -644,6 +725,41 @@ draw_results_view :: proc(app: ^App) {
 	draw_raw_table(app, raw)
 }
 
+// Indices (into rs.entries) that match the current search query. An empty
+// query returns every entry, so the browser always lists all dirs + .csv/.json.
+results_filtered_entries :: proc(app: ^App) -> []int {
+	rs := &app.results
+	query := strings.to_lower(string(rs.search_buf[:rs.search_len]), context.temp_allocator)
+	out := make([dynamic]int, 0, len(rs.entries), context.temp_allocator)
+	for e, i in rs.entries {
+		if len(query) == 0 {
+			append(&out, i)
+			continue
+		}
+		if strings.contains(strings.to_lower(e.name, context.temp_allocator), query) {
+			append(&out, i)
+		}
+	}
+	return out[:]
+}
+
+// Maps a visible row (the keyboard cursor position) to an entry index. Returns
+// -1 for the ".." parent row or when the row is out of range.
+results_entry_at_cursor :: proc(app: ^App, filtered: []int, has_parent: bool) -> int {
+	rs := &app.results
+	row := rs.file_cursor
+	if has_parent {
+		if row == 0 {
+			return -1
+		}
+		row -= 1
+	}
+	if row < 0 || row >= len(filtered) {
+		return -1
+	}
+	return filtered[row]
+}
+
 draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 	t := app.themes[app.theme_index]
 	s := app.palette.style
@@ -665,19 +781,34 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 		rl.Fade(t.text, 0.6),
 	)
 
-	viewport := rl.Rectangle{panel.x, panel.y + title_h, panel.width, panel.height - title_h}
+	// Search box filters the listing to matching dirs, .csv and .json files.
+	search_h := 28 * sc
+	search_rect := rl.Rectangle{panel.x + 8 * sc, panel.y + title_h + 2 * sc, panel.width - 16 * sc, search_h}
+	if draw_text_input(search_rect, rs.search_buf[:], &rs.search_len, &rs.search_edit, t, sc, "Search files (Ctrl+F)") {
+		rs.text_enter = true
+	}
+
+	filtered := results_filtered_entries(app)
+
+	viewport := rl.Rectangle {
+		panel.x,
+		panel.y + title_h + search_h + 8 * sc,
+		panel.width,
+		panel.height - title_h - search_h - 8 * sc,
+	}
 
 	row_h := 26 * sc
 	pitch := row_h + 2 * sc
 	has_parent := len(rs.root) > 0 && filepath.dir(rs.root) != rs.root
-	total_rows := len(rs.entries) + 1 if has_parent else len(rs.entries)
+	total_rows := len(filtered) + 1 if has_parent else len(filtered)
 	if total_rows > 0 {
 		rs.file_cursor = clamp(rs.file_cursor, 0, total_rows - 1)
 	}
 
 	// Keyboard navigation (gated so it never fights the palette, the path
-	// input, or an open dropdown).
-	if !app.palette.open && !rs.path_edit && !results_any_dropdown_open(rs) {
+	// input, the search box, an open dropdown, or an Enter a text box just
+	// consumed this frame).
+	if !app.palette.open && !rs.path_edit && !rs.search_edit && !rs.text_enter && !results_any_dropdown_open(rs) {
 		if total_rows > 0 && rl.IsKeyPressed(.DOWN) {
 			rs.file_cursor = min(rs.file_cursor + 1, total_rows - 1)
 		}
@@ -691,7 +822,7 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 			if rs.file_cursor == 0 && has_parent {
 				results_go_up(app)
 			} else {
-				entry_idx := rs.file_cursor - 1 if has_parent else rs.file_cursor
+				entry_idx := results_entry_at_cursor(app, filtered, has_parent)
 				if entry_idx >= 0 && entry_idx < len(rs.entries) {
 					if rs.entries[entry_idx].is_dir {
 						results_set_root(app, rs.entries[entry_idx].path)
@@ -728,11 +859,12 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 		draw_row(app, row, "..", true, false, t, sc)
 	}
 
-	for e, i in rs.entries {
+	for fi in filtered {
+		e := rs.entries[fi]
 		row := ui_alloc(&u, row_h, 2 * sc)
 		selected := false
 		for s2 in rs.selected {
-			if s2 == i {
+			if s2 == fi {
 				selected = true
 				break
 			}
@@ -750,9 +882,14 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 	}
 	ui_scroll_end(&u, &rs.file_scroll, viewport, t, sc)
 
-	// row interaction
+	// Row interaction. Clicks on the scrollbar track are ignored so scrolling
+	// never accidentally selects the file under the cursor.
 	mouse := rl.GetMousePosition()
-	if !app.palette.open && rl.IsMouseButtonReleased(.LEFT) && rl.CheckCollisionPointRec(mouse, viewport) {
+	track := scroll_track(viewport, sc)
+	if !app.palette.open &&
+	   rl.IsMouseButtonReleased(.LEFT) &&
+	   rl.CheckCollisionPointRec(mouse, viewport) &&
+	   !rl.CheckCollisionPointRec(mouse, track) {
 		row_top := viewport.y + SCROLLBAR_PAD * sc - rs.file_scroll.offset
 		row0 := int((mouse.y - row_top) / pitch)
 		if row0 < 0 {
@@ -766,14 +903,15 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 			}
 			row0 -= 1
 		}
-		if row0 >= 0 && row0 < len(rs.entries) {
+		if row0 >= 0 && row0 < len(filtered) {
+			fi := filtered[row0]
 			ctrl := rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL)
-			if rs.entries[row0].is_dir {
-				results_set_root(app, rs.entries[row0].path)
+			if rs.entries[fi].is_dir {
+				results_set_root(app, rs.entries[fi].path)
 			} else if ctrl {
-				results_toggle_select(app, row0)
+				results_toggle_select(app, fi)
 			} else {
-				results_select_only(app, row0)
+				results_select_only(app, fi)
 			}
 		}
 	}
@@ -849,7 +987,11 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 	ui_scroll_end(&u, &rs.dir_scroll, viewport, t, sc)
 
 	mouse := rl.GetMousePosition()
-	if !app.palette.open && rl.IsMouseButtonReleased(.LEFT) && rl.CheckCollisionPointRec(mouse, viewport) {
+	track := scroll_track(viewport, sc)
+	if !app.palette.open &&
+	   rl.IsMouseButtonReleased(.LEFT) &&
+	   rl.CheckCollisionPointRec(mouse, viewport) &&
+	   !rl.CheckCollisionPointRec(mouse, track) {
 		idx := int((mouse.y - (viewport.y + SCROLLBAR_PAD * sc) + rs.dir_scroll.offset) / row_h)
 		if idx >= 0 && idx < len(app.recents) {
 			results_open_recent(app, idx)
@@ -859,16 +1001,82 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 
 // --- plot panel --------------------------------------------------------------
 
+PLOT_NAMES := [?]string{"Map", "Line", "Histogram", "2D"}
+PLOT_SHORTCUTS := [?]string{"Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4"}
+
+// Plot-type dropdown with a keyboard shortcut for each plot. Replaces the old
+// clickable tab bar; Ctrl+1..4 switch the plot without opening the menu.
+draw_plot_selector :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32) {
+	rs := &app.results
+	n := len(PLOT_NAMES)
+	item_h := 24 * sc
+
+	mouse := rl.GetMousePosition()
+	hover := rl.CheckCollisionPointRec(mouse, rect)
+	bg := theme.axis_x if hover else theme.bg
+	rl.DrawRectangleRec(rect, bg)
+	rl.DrawRectangleLinesEx(rect, 1, theme.border)
+
+	txt := fmt.tprintf("Plot: %s", PLOT_NAMES[rs.plot.id])
+	txt_c := strings.clone_to_cstring(txt, context.temp_allocator)
+	draw_text(txt_c, c.int(rect.x + 8 * sc), c.int(rect.y + (rect.height - 14 * sc) * 0.5), i32(13 * sc), theme.text)
+
+	if hover && rl.IsMouseButtonReleased(.LEFT) && !app.palette.open {
+		rs.plot.plot_open = !rs.plot.plot_open
+	}
+
+	if rs.plot.plot_open {
+		if rl.IsKeyPressed(.UP) {
+			rs.plot.id = (rs.plot.id - 1 + n) % n
+		}
+		if rl.IsKeyPressed(.DOWN) {
+			rs.plot.id = (rs.plot.id + 1) % n
+		}
+		if rl.IsKeyPressed(.ENTER) {
+			rs.plot.plot_open = false
+		}
+
+		popup := rl.Rectangle{rect.x, rect.y + rect.height, rect.width, item_h * f32(n)}
+		rl.BeginScissorMode(c.int(popup.x), c.int(popup.y), c.int(popup.width), c.int(popup.height))
+		rl.DrawRectangleRec(popup, theme.window_bg)
+		rl.DrawRectangleLinesEx(popup, 1, theme.border)
+		for i in 0 ..< n {
+			item := rl.Rectangle{popup.x, popup.y + f32(i) * item_h, popup.width, item_h}
+			item_hover := rl.CheckCollisionPointRec(mouse, item)
+			if i == rs.plot.id {
+				rl.DrawRectangleRec(item, rl.Fade(theme.axis_z, 0.25))
+			} else if item_hover {
+				rl.DrawRectangleRec(item, rl.Fade(theme.axis_x, 0.4))
+			}
+			name_c := strings.clone_to_cstring(PLOT_NAMES[i], context.temp_allocator)
+			draw_text(name_c, c.int(item.x + 8 * sc), c.int(item.y + (item_h - 13 * sc) * 0.5), i32(13 * sc), theme.text)
+			shortcut_c := strings.clone_to_cstring(PLOT_SHORTCUTS[i], context.temp_allocator)
+			sw2 := f32(measure_text(shortcut_c, i32(11 * sc)))
+			draw_text(shortcut_c, c.int(item.x + item.width - sw2 - 8 * sc), c.int(item.y + (item_h - 11 * sc) * 0.5), i32(11 * sc), rl.Fade(theme.text, 0.55))
+			if item_hover && rl.IsMouseButtonReleased(.LEFT) {
+				rs.plot.id = i
+				rs.plot.plot_open = false
+			}
+		}
+		rl.EndScissorMode()
+	}
+
+	if rs.plot.plot_open {
+		popup := rl.Rectangle{rect.x, rect.y + rect.height, rect.width, item_h * f32(n)}
+		if rl.IsMouseButtonPressed(.LEFT) && !rl.CheckCollisionPointRec(mouse, rect) && !rl.CheckCollisionPointRec(mouse, popup) {
+			rs.plot.plot_open = false
+		}
+	}
+}
+
 draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 	t := app.themes[app.theme_index]
 	s := app.palette.style
 	sc := app.ui_scale
 	rs := &app.results
 
-	// plot tabs
+	// plot selector row (dropdown replaces the old tab bar)
 	tab_h := 30 * sc
-	tabs := [4]cstring{"Map", "Line", "Histogram", "2D"}
-	tab_w := (panel.width - 3 * 6 * sc) / 4
 
 	// column pickers
 	cfg_h := 34 * sc
@@ -995,16 +1203,9 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 	}
 	}
 
-	// tabs + column config drawn last so their popups render above the plot.
-	cx := panel.x
-	for label, i in tabs {
-		rect := rl.Rectangle{cx, panel.y, tab_w, tab_h}
-		active := rs.plot.id == i
-		if draw_tab_button(rect, label, active, t, sc) {
-			rs.plot.id = i
-		}
-		cx += tab_w + 6 * sc
-	}
+	// Plot selector + column config drawn last so their popups render above
+	// the plot.
+	draw_plot_selector(app, rl.Rectangle{panel.x, panel.y, 190 * sc, tab_h}, t, sc)
 	draw_plot_config(app, cfg_rect)
 }
 
@@ -1117,7 +1318,7 @@ draw_dropdown :: proc(
 		}
 
 		rl.BeginScissorMode(c.int(popup.x), c.int(popup.y), c.int(popup.width), c.int(popup.height))
-		rl.DrawRectangleRec(popup, rl.Color{30, 30, 40, 245})
+		rl.DrawRectangleRec(popup, theme.window_bg)
 		rl.DrawRectangleLinesEx(popup, 1, theme.border)
 		for n in 0 ..< max_items {
 			i := n + scroll^
@@ -1149,7 +1350,7 @@ draw_dropdown :: proc(
 }
 
 results_any_dropdown_open :: proc(rs: ^Results_State) -> bool {
-	return rs.plot.x_open || rs.plot.y_open || rs.plot.h_open || rs.plot.lat_open || rs.plot.lon_open
+	return rs.plot.x_open || rs.plot.y_open || rs.plot.h_open || rs.plot.lat_open || rs.plot.lon_open || rs.plot.plot_open
 }
 
 build_map_routes :: proc(app: ^App) -> []PlotRoute {
@@ -1429,25 +1630,8 @@ draw_button :: proc(rect: rl.Rectangle, label: cstring, theme: Theme, sc: f32) -
 	return hover && rl.IsMouseButtonReleased(.LEFT)
 }
 
-draw_tab_button :: proc(rect: rl.Rectangle, label: cstring, active: bool, theme: Theme, sc: f32) -> bool {
-	mouse := rl.GetMousePosition()
-	hover := rl.CheckCollisionPointRec(mouse, rect)
-	bg := theme.axis_x if active else (theme.bg if !hover else rl.Fade(theme.axis_x, 0.2))
-	rl.DrawRectangleRec(rect, bg)
-	rl.DrawRectangleLinesEx(rect, 1, theme.border)
-	col := theme.bg if active else theme.text
-	tw := f32(measure_text(label, i32(14 * sc)))
-	draw_text(
-		label,
-		c.int(rect.x + (rect.width - tw) * 0.5),
-		c.int(rect.y + (rect.height - 14 * sc) * 0.5),
-		i32(14 * sc),
-		col,
-	)
-	return hover && rl.IsMouseButtonReleased(.LEFT)
-}
-
-// Minimal text input. Returns true when Enter is pressed.
+// Minimal text input. Returns true when Enter is pressed. `hint` (optional) is
+// shown faded when the box is empty and not being edited.
 draw_text_input :: proc(
 	rect: rl.Rectangle,
 	buf: []u8,
@@ -1455,6 +1639,7 @@ draw_text_input :: proc(
 	editing: ^bool,
 	theme: Theme,
 	sc: f32,
+	hint: cstring = nil,
 ) -> bool {
 	mouse := rl.GetMousePosition()
 	hover := rl.CheckCollisionPointRec(mouse, rect)
@@ -1489,6 +1674,8 @@ draw_text_input :: proc(
 	if len(text) > 0 {
 		text_c := strings.clone_to_cstring(text, context.temp_allocator)
 		draw_text(text_c, c.int(rect.x + 8 * sc), c.int(rect.y + (rect.height - 14 * sc) * 0.5), i32(14 * sc), theme.text)
+	} else if hint != nil && !editing^ {
+		draw_text(hint, c.int(rect.x + 8 * sc), c.int(rect.y + (rect.height - 14 * sc) * 0.5), i32(14 * sc), rl.Fade(theme.text, 0.45))
 	}
 	if editing^ && i32(rl.GetTime() * 2) % 2 == 0 {
 		cx := rect.x + 8 * sc + f32(measure_text(strings.clone_to_cstring(text, context.temp_allocator), i32(14 * sc)))

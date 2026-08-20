@@ -1,7 +1,7 @@
 package palantir
 
 // Application shell: owns the raylib window and a reusable command palette,
-// and draws the current view (the widget gallery or the results explorer).
+// and draws the results explorer view.
 //
 // The lifecycle procs (`init`, `update`, `shutdown`, `should_run`,
 // `parent_window_size_changed`) mirror the karl-zylinski/odin-raylib-web
@@ -19,39 +19,18 @@ import "core:c"
 import "core:encoding/json"
 import "core:fmt"
 import "core:math"
-import "core:math/rand"
 import "core:os"
 import "core:sort"
 import "core:strings"
 import rl "vendor:raylib"
 
-// The top-level views/tabs. `switch app.view` in `app_update` is exhaustive,
-// so adding a view here forces its draw/update case to be handled.
-App_View :: enum {
-	view_widgets,
-	view_results,
-}
-
-// Labels for the clickable tab bar.
-view_tabs := [App_View]cstring {
-	.view_widgets = "Widgets",
-	.view_results = "Results",
-}
-
 App :: struct {
 	running:        bool,
-	view:           App_View,
 	themes:         [len(BASE_THEMES)]Theme,
 	theme_index:    int,
 	ui_scale_zoom:  f32, // user-adjustable multiplier on the detected UI scale
 	ui_scale:       f32, // clamped base scale * zoom, used for all UI metrics
 	palette:        Command_Palette,
-	gallery_scroll: Scroll_State,
-	demo_data_init: bool,
-	demo_series_sin:  [DEMO_SERIES_COUNT][2]f64,
-	demo_series_sin2: [DEMO_SERIES_COUNT][2]f64,
-	demo_hist_values: [DEMO_HIST_COUNT]f32,
-	demo2d_points:    [DEMO_2D_POINT_COUNT][2]f64,
 	// Results explorer state (see results_view.odin).
 	results:        Results_State,
 	// Plot PNG export feedback (see plot_export.odin).
@@ -151,9 +130,10 @@ GuiCommand :: enum {
 	theme_rosepine,
 	theme_mocha,
 	theme_vesper,
-	view_widgets,
 	open_results_folder,
 	open_recents,
+	find_files,
+	refresh_plots,
 	quit,
 }
 
@@ -185,11 +165,6 @@ gui_commands := [?]Palette_Command {
 		},
 	},
 	{
-		name = "View widgets",
-		description = "open the widget gallery",
-		user_data = rawptr(uintptr(GuiCommand.view_widgets)),
-	},
-	{
 		name = "Open results folder",
 		description = "browse .csv / .json result files",
 		user_data = rawptr(uintptr(GuiCommand.open_results_folder)),
@@ -198,6 +173,16 @@ gui_commands := [?]Palette_Command {
 		name = "Open recents",
 		description = "open the recent files view",
 		user_data = rawptr(uintptr(GuiCommand.open_recents)),
+	},
+	{
+		name = "Find files",
+		description = "focus the file search box",
+		user_data = rawptr(uintptr(GuiCommand.find_files)),
+	},
+	{
+		name = "Refresh plots",
+		description = "reload selected result files",
+		user_data = rawptr(uintptr(GuiCommand.refresh_plots)),
 	},
 	{
 		name = "Recent files",
@@ -263,8 +248,6 @@ app_init :: proc(app: ^App, config := App_Config{}) {
 
 	app.recents = settings.recent_files
 	results_init(app)
-	// Open directly into the results explorer (there is no welcome view).
-	app.view = .view_results
 	cwd, _ := os.get_working_directory(context.temp_allocator)
 	results_set_root(app, cwd)
 	refresh_palette_recents(app)
@@ -313,14 +296,7 @@ app_update :: proc(app: ^App) {
 	t := app.themes[app.theme_index]
 	app.palette.style = palette_style_for_theme(t, app.ui_scale)
 	rl.ClearBackground(t.window_bg)
-	switch app.view {
-	case .view_widgets:
-		draw_widget_gallery(app)
-	case .view_results:
-		draw_results_view(app)
-	}
-	// Drawn after the view so content stays behind the clickable tab bar.
-	draw_view_tabs(app)
+	draw_results_view(app)
 
 	palette_draw(&app.palette, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()))
 	draw_ui_scale(app)
@@ -386,43 +362,11 @@ handle_ui_zoom :: proc(app: ^App) {
 
 // --- views ------------------------------------------------------------------
 
-view_tab_height: f32 = 30
-
 UI_SCALE_MIN :: 0.5
 UI_SCALE_MAX :: 4.0
 UI_SCALE_STEP :: 1.15
 
-// Draws the clickable tab bar along the top of the window. Clicking a tab
-// switches the active view.
-draw_view_tabs :: proc(app: ^App) {
-	s := app.palette.style
-	t := app.themes[app.theme_index]
-	sc := app.ui_scale
-
-	u := ui_begin(0, 0, view_tab_height * sc, .Horizontal, sc)
-	for v in App_View {
-		label := view_tabs[v]
-		tab_w := f32(measure_text(label, i32(18 * sc))) + 40 * sc
-		rect := ui_alloc(&u, tab_w)
-
-		bg := s.panel
-		if app.view == v {
-			bg = s.selection
-		}
-		rl.DrawRectangleRec(rect, bg)
-		rl.DrawRectangleLinesEx(rect, 1, s.border)
-		draw_text(label, c.int(rect.x + 20 * sc), c.int(rect.y + 7 * sc), i32(18 * sc), t.text)
-
-		if !app.palette.open && rl.IsMouseButtonPressed(.LEFT) {
-			m := rl.GetMousePosition()
-			if rl.CheckCollisionPointRec(m, rect) {
-				app.view = v
-			}
-		}
-	}
-}
-
-// Small "UI 150%" readout stacked above the tab bar; +/-/0 adjust it.
+// Small "UI 150%" readout in the top-right corner; +/-/0 adjust it.
 draw_ui_scale :: proc(app: ^App) {
 	s := app.palette.style
 	sc := app.ui_scale
@@ -433,8 +377,8 @@ draw_ui_scale :: proc(app: ^App) {
 	label := fmt.ctprintf("UI %d%%", int(app.ui_scale * 100 + 0.5))
 	text_w := f32(measure_text(label, s.font_size - 4))
 	panel_w := text_w + 24 * sc
-	// sit just above the tab bar
-	y := view_tab_height * sc + 6 * sc
+	// sit in the top-right corner
+	y := 6 * sc
 	panel := rl.Rectangle{sw - panel_w - 8 * sc, y, panel_w, panel_h}
 	rl.DrawRectangleRec(panel, s.panel)
 	rl.DrawRectangleLinesEx(panel, 2, s.border)
@@ -456,12 +400,14 @@ on_palette_select :: proc(cmd: Palette_Command) {
 	case .theme_vesper:
 		default_app.theme_index = 2
 		save_settings(&default_app)
-	case .view_widgets:
-		default_app.view = .view_widgets
 	case .open_results_folder:
 		open_results_folder(&default_app)
 	case .open_recents:
 		open_recents_view(&default_app)
+	case .find_files:
+		results_focus_search(&default_app)
+	case .refresh_plots:
+		results_refresh(&default_app)
 	case .quit:
 		default_app.running = false
 	case:
@@ -1232,147 +1178,3 @@ color_lerp :: proc(a, b: rl.Color, t: f32) -> rl.Color {
 	}
 }
 
-// --- widget gallery ---------------------------------------------------------
-
-DEMO_SERIES_COUNT :: 200
-DEMO_HIST_COUNT :: 200
-DEMO_2D_POINT_COUNT :: 2000
-
-Widget_Demo :: struct {
-	name: string,
-	draw: proc(app: ^App, rect: rl.Rectangle),
-}
-
-// add widget to test here
-widget_demos := []Widget_Demo {
-	{name = "Plot series", draw = demo_plot_series},
-	{name = "Plot histogram", draw = demo_plot_histogram},
-	{name = "2D histogram", draw = demo_plot_histogram_2d},
-}
-
-// Draws every entry in `widget_demos` as one full-screen card, scrollable
-// vertically (mouse wheel + draggable scrollbar) when the content overflows.
-draw_widget_gallery :: proc(app: ^App) {
-	t := app.themes[app.theme_index]
-	s := app.palette.style
-
-	sw := f32(rl.GetScreenWidth())
-	sh := f32(rl.GetScreenHeight())
-	sc := app.ui_scale
-
-	pad: f32 = 12 * sc
-	header_h: f32 = view_tab_height * sc + 10 * sc
-	font_size: i32 = i32(16 * sc)
-	title_h: f32 = 28 * sc
-
-	card_w := sw - 3 * pad - SCROLLBAR_GUTTER * sc
-	card_h := sh - header_h - 2 * pad
-	viewport := rl.Rectangle{0, header_h, sw, sh - header_h}
-
-	scroll := &app.gallery_scroll
-	wheel := !app.palette.open
-
-	// content is laid out inside the scroll region, which clips to the
-	// viewport and scrolls via wheel/drag; the scrollbar is drawn on end.
-	u := ui_scroll_begin(scroll, viewport, sc, wheel)
-	for demo in widget_demos {
-		row_rect := ui_alloc(&u, card_h, pad)
-		rl.DrawRectangleRec(row_rect, s.panel)
-		rl.DrawRectangleLinesEx(row_rect, 1, s.border)
-
-		label := strings.clone_to_cstring(demo.name, context.temp_allocator)
-		draw_text(label, c.int(row_rect.x + 8 * sc), c.int(row_rect.y + 6 * sc), font_size, t.text)
-
-		inner := rl.Rectangle {
-			row_rect.x + 8 * sc,
-			row_rect.y + title_h,
-			row_rect.width - 16 * sc,
-			row_rect.height - title_h - 8 * sc,
-		}
-		demo.draw(app, inner)
-	}
-	ui_scroll_end(&u, scroll, viewport, t, sc)
-}
-
-// Generates the widget-gallery demo data once per app run. Called by every
-// demo proc; the shared flag makes the whole batch cheap to re-enter.
-ensure_demo_data :: proc(app: ^App) {
-	if app.demo_data_init {
-		return
-	}
-
-	for i in 0 ..< DEMO_SERIES_COUNT {
-		x := f64(i) * 0.1
-		app.demo_series_sin[i] = [2]f64{x, math.sin(x)}
-		app.demo_series_sin2[i] = [2]f64{x, math.sin(x) * math.sin(x)}
-	}
-
-	for i in 0 ..< DEMO_HIST_COUNT {
-		x := f32(i) * 0.05
-		app.demo_hist_values[i] = 0.5 + 0.5 * math.sin_f32(x * 3.0 + 1.0)
-	}
-
-	for i in 0 ..< DEMO_2D_POINT_COUNT {
-		u1 := max(1e-9, rand.float64())
-		u2 := rand.float64()
-		r := math.sqrt(-2 * math.ln(u1))
-		theta := math.TAU * u2
-		gx := r * math.cos(theta)
-		gy := r * math.sin(theta)
-		app.demo2d_points[i] = [2]f64{2.0 * gx + 0.5, 1.5 * (0.6 * gx + gy) + 0.25}
-	}
-
-	app.demo_data_init = true
-}
-
-// Demo data for the `plot_series` widget.
-demo_plot_series :: proc(app: ^App, rect: rl.Rectangle) {
-	t := app.themes[app.theme_index]
-	ensure_demo_data(app)
-
-	series := []PlotSeries {
-		{name = "sin(x)", color = PLOT_BLUE, points = app.demo_series_sin[:]},
-		{name = "sin^2(x)", color = PLOT_ORANGE, points = app.demo_series_sin2[:]},
-	}
-
-	plot_series(app, series, "Sine wave", "x", "y", rect, t, i32(12 * app.ui_scale), app.ui_scale)
-}
-
-demo_plot_histogram :: proc(app: ^App, rect: rl.Rectangle) {
-	number_bins := 0
-	t := app.themes[app.theme_index]
-	ensure_demo_data(app)
-
-	plot_histogram(
-		app,
-		app.demo_hist_values[:],
-		"Histogram",
-		"value",
-		"count",
-		number_bins,
-		rect,
-		t,
-		i32(12 * app.ui_scale),
-		app.ui_scale,
-	)
-}
-
-// Demo data for the `plot_histogram_2d` widget: correlated gaussian pairs.
-demo_plot_histogram_2d :: proc(app: ^App, rect: rl.Rectangle) {
-	t := app.themes[app.theme_index]
-	ensure_demo_data(app)
-
-	plot_histogram_2d(
-		app,
-		app.demo2d_points[:],
-		"2D histogram",
-		"x",
-		"y",
-		0,
-		0,
-		rect,
-		t,
-		i32(12 * app.ui_scale),
-		app.ui_scale,
-	)
-}
