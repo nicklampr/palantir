@@ -86,6 +86,7 @@ plot_export_series :: proc(
 	theme: Theme,
 	font_size: i32,
 	sc: f32,
+	scatter: bool = false,
 ) -> bool {
 	path := plot_export_path(app, title)
 	rt, ok := plot_export_begin(app, c.int(rect.width), c.int(rect.height))
@@ -103,6 +104,7 @@ plot_export_series :: proc(
 		theme,
 		font_size,
 		sc,
+		scatter,
 	)
 	rl.EndTextureMode()
 

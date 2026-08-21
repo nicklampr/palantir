@@ -1,9 +1,9 @@
 package palantir
 
 // Results explorer view: browse a folder for .csv/.json files, multi-select
-// them, choose one of the available plots (Map / Line / Histogram / 2D
-// histogram), and inspect the raw data in a virtualized table that only
-// renders the rows that are actually visible.
+// them, choose one of the available plots (Map / Line / Scatter /
+// Histogram / 2D histogram), and inspect the raw data in a virtualized table
+// that only renders the rows that are actually visible.
 
 import "core:c"
 import "core:fmt"
@@ -15,14 +15,18 @@ import "core:strings"
 import rl "vendor:raylib"
 
 RECENT_CMD_BASE :: 2000
+// Reserve a distinct user_data range for the folder-navigation palette
+// commands (kept above the recents range).
+FOLDER_CMD_BASE :: 4000
 RECENT_MAX :: 12
 MAX_PLOT_POINTS :: 20000
 RAW_COL_MIN_W :: 90
 
 PLOT_MAP :: 0
 PLOT_LINE :: 1
-PLOT_HIST :: 2
-PLOT_HIST2D :: 3
+PLOT_SCATTER :: 2
+PLOT_HIST :: 3
+PLOT_HIST2D :: 4
 
 File_Entry :: struct {
 	name:   string,
@@ -62,7 +66,16 @@ Results_State :: struct {
 	active_ds:     int,
 	raw_scroll:    Scroll_State,
 	raw_col_scroll: f32,
+	// Horizontal raw-table scrollbar drag state.
+	raw_col_dragging: bool,
+	raw_col_grab_off: f32,
 	raw_widths:    [dynamic]f32,
+	// Shared filter box for the column dropdowns (only one popup ever open).
+	col_filter:    [64]u8,
+	col_filter_len: int,
+	// Command-palette folder navigation: parent + subdirectories of `root`,
+	// rebuilt whenever the folder is rescanned. Owns the name/path strings.
+	folder_cmds:   [dynamic]Palette_Command,
 	show_recents:  bool,
 	search_buf:    [256]u8,
 	search_len:    int,
@@ -110,6 +123,11 @@ results_destroy :: proc(app: ^App) {
 	}
 	delete(rs.datasets)
 	delete(rs.raw_widths)
+	for fc in rs.folder_cmds {
+		delete(fc.name)
+		delete(fc.description)
+	}
+	delete(rs.folder_cmds)
 	if rs.root != "" {
 		delete(rs.root)
 	}
@@ -172,6 +190,65 @@ results_scan :: proc(app: ^App) {
 	rs.entries = entries[:] // dynamic backing is now owned by rs.entries
 	rs.file_cursor = 0
 	results_clear_msg(app)
+	// Keep the palette's folder/recents trees in sync with the new listing.
+	refresh_palette_folders(app)
+	refresh_palette_recents(app)
+}
+
+// Rebuilds the folder-navigation command list for the current root: a ".."
+// parent entry (when there is one) followed by every subdirectory. Owned by
+// `folder_cmds` so the palette can borrow the slice safely across rescans.
+refresh_palette_folders :: proc(app: ^App) {
+	rs := &app.results
+	for fc in rs.folder_cmds {
+		delete(fc.name)
+		delete(fc.description)
+	}
+	clear(&rs.folder_cmds)
+	if len(rs.root) == 0 {
+		return
+	}
+
+	parent := filepath.dir(rs.root)
+	if parent != rs.root {
+		append(&rs.folder_cmds, Palette_Command {
+			name        = strings.clone(".."),
+			description = strings.clone(parent),
+			user_data   = rawptr(uintptr(FOLDER_CMD_BASE)),
+		})
+	}
+	for e in rs.entries {
+		if !e.is_dir {
+			continue
+		}
+		append(&rs.folder_cmds, Palette_Command {
+			name        = strings.clone(e.name),
+			description = strings.clone(e.path),
+			user_data   = rawptr(uintptr(FOLDER_CMD_BASE + len(rs.folder_cmds))),
+		})
+	}
+}
+
+// Opens the command palette focused on folder navigation for the current root.
+// Esc takes you back to the normal palette.
+open_folder_palette :: proc(app: ^App) {
+	refresh_palette_folders(app)
+	palette_open_it(&app.palette)
+	if len(app.results.folder_cmds) > 0 {
+		palette_push_layer(&app.palette)
+		app.palette.commands = app.results.folder_cmds[:]
+		palette_reset(&app.palette)
+	}
+}
+
+// Jumps the browser into the folder selected in the folder palette.
+results_handle_folder_select :: proc(app: ^App, idx: int) {
+	if idx < 0 || idx >= len(app.results.folder_cmds) {
+		return
+	}
+	path := app.results.folder_cmds[idx].description
+	results_set_root(app, path)
+	app.results.show_recents = false
 }
 
 results_set_root :: proc(app: ^App, path: string) {
@@ -573,10 +650,15 @@ results_handle_shortcuts :: proc(app: ^App) {
 		if rl.IsKeyPressed(.R) {
 			results_refresh(app)
 		}
+		// Ctrl+G opens the folder-selection palette for the current root.
+		if rl.IsKeyPressed(.G) {
+			open_folder_palette(app)
+		}
 		if rl.IsKeyPressed(.ONE) {rs.plot.id = PLOT_MAP}
 		if rl.IsKeyPressed(.TWO) {rs.plot.id = PLOT_LINE}
-		if rl.IsKeyPressed(.THREE) {rs.plot.id = PLOT_HIST}
-		if rl.IsKeyPressed(.FOUR) {rs.plot.id = PLOT_HIST2D}
+		if rl.IsKeyPressed(.THREE) {rs.plot.id = PLOT_SCATTER}
+		if rl.IsKeyPressed(.FOUR) {rs.plot.id = PLOT_HIST}
+		if rl.IsKeyPressed(.FIVE) {rs.plot.id = PLOT_HIST2D}
 	}
 }
 
@@ -594,8 +676,12 @@ refresh_palette_recents :: proc(app: ^App) {
 	clear(&app.palette_root)
 	for cmd in gui_commands {
 		c := cmd
-		if GuiCommand(uintptr(c.user_data)) == .recent_files {
+		switch GuiCommand(uintptr(c.user_data)) {
+		case .recent_files:
 			c.children = app.palette_recent_children[:]
+		case .goto_folder:
+			c.children = app.results.folder_cmds[:]
+		case:
 		}
 		append(&app.palette_root, c)
 	}
@@ -648,8 +734,9 @@ draw_results_view :: proc(app: ^App) {
 	results_handle_shortcuts(app)
 
 	// Discard queued characters while no text field is focused, so stale input
-	// can never be injected into a box the moment it is clicked.
-	if !app.palette.open && !rs.path_edit && !rs.search_edit {
+	// can never be injected into a box the moment it is clicked. A dropdown's
+	// column filter captures typing while open, so it also pauses the discard.
+	if !app.palette.open && !rs.path_edit && !rs.search_edit && !results_any_dropdown_open(rs) {
 		for rl.GetCharPressed() != 0 {}
 	}
 
@@ -698,7 +785,9 @@ draw_results_view :: proc(app: ^App) {
 	}
 
 	// --- layout -------------------------------------------------------------
-	bottom_h := 210 * sc
+	// Keep the raw table a fixed-ish strip (caps at ~14% of the screen) so on
+	// tall 4K windows the plot panel always absorbs the extra vertical space.
+	bottom_h := clamp(sh * 0.14, 160 * sc, 220 * sc)
 	body_top := top + bar_h + 12 * sc
 	body_bottom := sh - bottom_h - 4 * sc
 	left_w := 330 * sc
@@ -1001,8 +1090,8 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 
 // --- plot panel --------------------------------------------------------------
 
-PLOT_NAMES := [?]string{"Map", "Line", "Histogram", "2D"}
-PLOT_SHORTCUTS := [?]string{"Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4"}
+PLOT_NAMES := [?]string{"Map", "Line", "Scatter", "Histogram", "2D"}
+PLOT_SHORTCUTS := [?]string{"Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5"}
 
 // Plot-type dropdown with a keyboard shortcut for each plot. Replaces the old
 // clickable tab bar; Ctrl+1..4 switch the plot without opening the menu.
@@ -1022,6 +1111,9 @@ draw_plot_selector :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32)
 	draw_text(txt_c, c.int(rect.x + 8 * sc), c.int(rect.y + (rect.height - 14 * sc) * 0.5), i32(13 * sc), theme.text)
 
 	if hover && rl.IsMouseButtonReleased(.LEFT) && !app.palette.open {
+		if !rs.plot.plot_open {
+			results_close_column_popups(&app.results)
+		}
 		rs.plot.plot_open = !rs.plot.plot_open
 	}
 
@@ -1132,7 +1224,7 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 				)
 			}
 
-		case PLOT_LINE:
+		case PLOT_LINE, PLOT_SCATTER:
 			x_name := results_col_name(app, rs.plot.x_col)
 			y_name := results_col_name(app, rs.plot.y_col)
 			if x_name == "" || y_name == "" {
@@ -1141,7 +1233,8 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 				rl.DrawRectangleLinesEx(plot_rect, 1, t.border)
 				draw_text(hint, c.int(plot_rect.x + 12 * sc), c.int(plot_rect.y + 12 * sc), fs, rl.Fade(t.text, 0.7))
 			} else {
-				series := build_line_series(app, x_name, y_name)
+				hue_name := results_col_name(app, rs.plot.h_col)
+				series := build_line_series(app, x_name, y_name, hue_name)
 				if len(series) == 0 {
 					hint := strings.clone_to_cstring("No data", context.temp_allocator)
 					rl.DrawRectangleRec(plot_rect, t.bg)
@@ -1156,7 +1249,8 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 							x_label = "time (s)"
 						}
 					}
-					plot_series(app, series, "Line plot", x_label, y_name, plot_rect, t, fs, sc)
+					title := "Scatter plot" if rs.plot.id == PLOT_SCATTER else "Line plot"
+					plot_series(app, series, title, x_label, y_name, plot_rect, t, fs, sc, rs.plot.id == PLOT_SCATTER)
 				}
 			}
 
@@ -1203,10 +1297,53 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 	}
 	}
 
-	// Plot selector + column config drawn last so their popups render above
-	// the plot.
-	draw_plot_selector(app, rl.Rectangle{panel.x, panel.y, 190 * sc, tab_h}, t, sc)
+	// Column config is drawn before the plot selector, so when the selector's
+	// dropdown is open its opaque popup paints cleanly over the config row
+	// (standard dropdown cover) instead of the two rows colliding. Both render
+	// after the plot so their popups stay on top of it.
 	draw_plot_config(app, cfg_rect)
+	draw_plot_selector(app, rl.Rectangle{panel.x, panel.y, 190 * sc, tab_h}, t, sc)
+}
+
+// Fuzzy word filter for the column dropdowns: every whitespace-delimited term
+// in `query` must match somewhere in `name` (case-insensitive substring, same
+// rule as the command palette). Empty query matches everything.
+fuzzy_words_match :: proc(name, query: string) -> bool {
+	if len(query) == 0 {
+		return true
+	}
+	words := strings.fields(query, context.temp_allocator)
+	for w in words {
+		if !palette_fuzzy_contains(name, w) {
+			return false
+		}
+	}
+	return true
+}
+
+// Lays out `labels` as equal-width dropdowns filling `rect` and draws them.
+// Used by the column-config row so every plot type shares one slotting rule.
+draw_dropdown_row :: proc(
+	app: ^App,
+	rect: rl.Rectangle,
+	labels: []string,
+	sels: []^int,
+	opens: []^bool,
+	scrolls: []^int,
+	names: []string,
+	theme: Theme,
+	sc: f32,
+) {
+	n := min(len(labels), len(sels), len(opens), len(scrolls))
+	if n == 0 {
+		return
+	}
+	gap := 10 * sc
+	item_w := (rect.width - f32(n - 1) * gap) / f32(n)
+	for i in 0 ..< n {
+		r := rl.Rectangle {rect.x + f32(i) * (item_w + gap), rect.y, item_w, rect.height}
+		draw_dropdown(app, r, labels[i], names, sels[i], opens[i], scrolls[i], theme, sc)
+	}
 }
 
 // Draws the column-selection dropdowns for the active plot.
@@ -1214,25 +1351,20 @@ draw_plot_config :: proc(app: ^App, rect: rl.Rectangle) {
 	t := app.themes[app.theme_index]
 	sc := app.ui_scale
 	rs := &app.results
-	ds := active_dataset(rs)
 
-	names := ds_column_names(ds)
-	item_w := (rect.width - 3 * 10 * sc) / 4
-	item_h := rect.height
+	names := ds_column_names(active_dataset(rs))
 
-	// Dropdown pairs for the active plot type.
+	// Dropdown pairs for the active plot type. Line/Scatter additionally get a
+	// "Hue" dropdown that colors points by a third column (seaborn-style).
 	switch rs.plot.id {
 	case PLOT_MAP:
-		draw_dropdown(app, rl.Rectangle{rect.x, rect.y, item_w, item_h}, "Lat", names, &rs.plot.lat_col, &rs.plot.lat_open, &rs.plot.lat_scroll, t, sc)
-		draw_dropdown(app, rl.Rectangle{rect.x + (item_w + 10 * sc), rect.y, item_w, item_h}, "Lon", names, &rs.plot.lon_col, &rs.plot.lon_open, &rs.plot.lon_scroll, t, sc)
-	case PLOT_LINE:
-		draw_dropdown(app, rl.Rectangle{rect.x, rect.y, item_w, item_h}, "X", names, &rs.plot.x_col, &rs.plot.x_open, &rs.plot.x_scroll, t, sc)
-		draw_dropdown(app, rl.Rectangle{rect.x + (item_w + 10 * sc), rect.y, item_w, item_h}, "Y", names, &rs.plot.y_col, &rs.plot.y_open, &rs.plot.y_scroll, t, sc)
+		draw_dropdown_row(app, rect, {"Lat", "Lon"}, {&rs.plot.lat_col, &rs.plot.lon_col}, {&rs.plot.lat_open, &rs.plot.lon_open}, {&rs.plot.lat_scroll, &rs.plot.lon_scroll}, names, t, sc)
+	case PLOT_LINE, PLOT_SCATTER:
+		draw_dropdown_row(app, rect, {"X", "Y", "Hue"}, {&rs.plot.x_col, &rs.plot.y_col, &rs.plot.h_col}, {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.h_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.h_scroll}, names, t, sc)
 	case PLOT_HIST:
-		draw_dropdown(app, rl.Rectangle{rect.x, rect.y, item_w * 2 + 10 * sc, item_h}, "Column", names, &rs.plot.h_col, &rs.plot.h_open, &rs.plot.h_scroll, t, sc)
+		draw_dropdown_row(app, rect, {"Column"}, {&rs.plot.h_col}, {&rs.plot.h_open}, {&rs.plot.h_scroll}, names, t, sc)
 	case PLOT_HIST2D:
-		draw_dropdown(app, rl.Rectangle{rect.x, rect.y, item_w, item_h}, "X", names, &rs.plot.x_col, &rs.plot.x_open, &rs.plot.x_scroll, t, sc)
-		draw_dropdown(app, rl.Rectangle{rect.x + (item_w + 10 * sc), rect.y, item_w, item_h}, "Y", names, &rs.plot.y_col, &rs.plot.y_open, &rs.plot.y_scroll, t, sc)
+		draw_dropdown_row(app, rect, {"X", "Y"}, {&rs.plot.x_col, &rs.plot.y_col}, {&rs.plot.x_open, &rs.plot.y_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll}, names, t, sc)
 	}
 }
 
@@ -1275,65 +1407,152 @@ draw_dropdown :: proc(
 	draw_text(txt_c, c.int(rect.x + 8 * sc), c.int(rect.y + (rect.height - 14 * sc) * 0.5), i32(13 * sc), theme.text)
 
 	if rl.CheckCollisionPointRec(mouse, rect) && rl.IsMouseButtonReleased(.LEFT) && !app.palette.open {
+		if !open^ {
+			results_close_column_popups(&app.results, open)
+			app.results.col_filter_len = 0
+		}
+		app.results.plot.plot_open = false
 		open^ = !open^
 	}
 
+	search_h := 24 * sc
+
 	// Popup list.
 	if open^ {
+		rs := &app.results
+
+		// Filter box typing (only one popup open at a time, shared buffer).
+		for {
+			ch := rl.GetCharPressed()
+			if ch == 0 {
+				break
+			}
+			if ch >= 32 && ch <= 126 && rs.col_filter_len < len(rs.col_filter) - 1 {
+				rs.col_filter[rs.col_filter_len] = u8(ch)
+				rs.col_filter_len += 1
+			}
+		}
+		if rl.IsKeyPressed(.BACKSPACE) && rs.col_filter_len > 0 {
+			rs.col_filter_len -= 1
+			rs.col_filter[rs.col_filter_len] = 0
+		}
+		if rl.IsKeyPressed(.ESCAPE) {
+			open^ = false
+		}
+
+		// Fuzzy word filter over the column names.
+		filtered := make([dynamic]int, 0, len(names), context.temp_allocator)
+		query := string(rs.col_filter[:rs.col_filter_len])
+		for name, i in names {
+			if fuzzy_words_match(name, query) {
+				append(&filtered, i)
+			}
+		}
+		count := len(filtered)
+
+		// Position of the current selection within the filtered list.
+		cur_pos := -1
+		if sel^ >= 0 {
+			for fp, actual in filtered {
+				if actual == sel^ {
+					cur_pos = fp
+					break
+				}
+			}
+		}
+
 		// Keyboard selection + scrolling (works without hovering the popup).
 		if rl.IsKeyPressed(.DOWN) {
-			if sel^ < 0 {
-				sel^ = 0
-			} else if sel^ < len(names) - 1 {
-				sel^ += 1
+			if cur_pos < 0 {
+				cur_pos = 0 if count > 0 else -1
+			} else if cur_pos < count - 1 {
+				cur_pos += 1
 			}
 		}
 		if rl.IsKeyPressed(.UP) {
-			if sel^ < 0 {
-				sel^ = len(names) - 1
-			} else if sel^ > 0 {
-				sel^ -= 1
+			if cur_pos < 0 {
+				cur_pos = count - 1
+			} else if cur_pos > 0 {
+				cur_pos -= 1
 			}
 		}
 		if rl.IsKeyPressed(.ENTER) {
+			if cur_pos >= 0 && cur_pos < count {
+				sel^ = filtered[cur_pos]
+			}
 			open^ = false
 		}
-		// Keep the selection visible.
-		if sel^ >= 0 && sel^ < len(names) {
-			if sel^ < scroll^ {
-				scroll^ = sel^
-			}
-			if sel^ >= scroll^ + max_items {
-				scroll^ = sel^ - max_items + 1
-			}
+		if cur_pos >= 0 && cur_pos < count {
+			sel^ = filtered[cur_pos]
 		}
 
-		popup_h := item_h * f32(max_items)
+		// Keep the selection visible (scroll is a position in the filtered list).
+		if cur_pos >= 0 && cur_pos < count {
+			if cur_pos < scroll^ {
+				scroll^ = cur_pos
+			}
+			if cur_pos >= scroll^ + max_items {
+				scroll^ = cur_pos - max_items + 1
+			}
+		}
+		max_scroll := max(count - max_items, 0)
+		scroll^ = clamp(scroll^, 0, max_scroll)
+
+		popup_h := search_h + item_h * f32(max_items) + 6 * sc
 		popup := rl.Rectangle{rect.x, rect.y + rect.height, rect.width, popup_h}
-		scroll^ = clamp(scroll^, 0, max(0, len(names) - max_items))
 
 		// Wheel scrolls the visible window of items.
 		if rl.CheckCollisionPointRec(mouse, popup) {
-			scroll^ = clamp(scroll^ - int(rl.GetMouseWheelMove()), 0, max(0, len(names) - max_items))
+			scroll^ = clamp(scroll^ - int(rl.GetMouseWheelMove()), 0, max_scroll)
 		}
 
 		rl.BeginScissorMode(c.int(popup.x), c.int(popup.y), c.int(popup.width), c.int(popup.height))
 		rl.DrawRectangleRec(popup, theme.window_bg)
 		rl.DrawRectangleLinesEx(popup, 1, theme.border)
-		for n in 0 ..< max_items {
-			i := n + scroll^
-			item := rl.Rectangle{popup.x, popup.y + f32(n) * item_h, popup.width, item_h}
+
+		// Filter box at the top of the popup.
+		search_rect := rl.Rectangle{popup.x + 4 * sc, popup.y + 4 * sc, popup.width - 8 * sc, search_h - 4 * sc}
+		rl.DrawRectangleRec(search_rect, theme.bg)
+		rl.DrawRectangleLinesEx(search_rect, 1, theme.border)
+		ftext := string(rs.col_filter[:rs.col_filter_len])
+		if len(ftext) > 0 {
+			ftext_c := strings.clone_to_cstring(ftext, context.temp_allocator)
+			draw_text(
+				ftext_c,
+				c.int(search_rect.x + 4 * sc),
+				c.int(search_rect.y + (search_rect.height - 12 * sc) * 0.5),
+				i32(12 * sc),
+				theme.text,
+			)
+		} else {
+			hint_c := strings.clone_to_cstring("filter…", context.temp_allocator)
+			draw_text(
+				hint_c,
+				c.int(search_rect.x + 4 * sc),
+				c.int(search_rect.y + (search_rect.height - 12 * sc) * 0.5),
+				i32(12 * sc),
+				rl.Fade(theme.text, 0.45),
+			)
+		}
+
+		// Items, drawn from the filtered list.
+		list_top := popup.y + search_h
+		visible := min(max_items, count)
+		for n in 0 ..< visible {
+			fp := n + scroll^
+			actual := filtered[fp]
+			item := rl.Rectangle{popup.x, list_top + f32(n) * item_h, popup.width, item_h}
 			item_hover := rl.CheckCollisionPointRec(mouse, item)
 			if item_hover {
 				rl.DrawRectangleRec(item, rl.Fade(theme.axis_x, 0.4))
 			}
-			if i == sel^ {
+			if fp == cur_pos {
 				rl.DrawRectangleRec(item, rl.Fade(theme.axis_z, 0.25))
 			}
-			item_c := strings.clone_to_cstring(names[i], context.temp_allocator)
+			item_c := strings.clone_to_cstring(names[actual], context.temp_allocator)
 			draw_text(item_c, c.int(item.x + 6 * sc), c.int(item.y + 3 * sc), i32(12 * sc), theme.text)
 			if item_hover && rl.IsMouseButtonReleased(.LEFT) {
-				sel^ = i
+				sel^ = actual
 				open^ = false
 			}
 		}
@@ -1342,9 +1561,22 @@ draw_dropdown :: proc(
 
 	// Close when clicking anywhere outside the button and popup.
 	if open^ {
-		in_popup := rl.CheckCollisionPointRec(mouse, rl.Rectangle{rect.x, rect.y + rect.height, rect.width, item_h * f32(max_items)})
+		popup := rl.Rectangle{rect.x, rect.y + rect.height, rect.width, search_h + item_h * f32(max_items) + 6 * sc}
+		in_popup := rl.CheckCollisionPointRec(mouse, popup)
 		if rl.IsMouseButtonPressed(.LEFT) && !rl.CheckCollisionPointRec(mouse, rect) && !in_popup {
 			open^ = false
+		}
+	}
+}
+
+// Closes every column dropdown popup except `keep` (nil = close all). Used to
+// guarantee only one popup is ever open, so the plot selector's dropdown never
+// overlaps the column-config popups.
+results_close_column_popups :: proc(rs: ^Results_State, keep: ^bool = nil) {
+	popups := [?]^bool {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.h_open, &rs.plot.lat_open, &rs.plot.lon_open}
+	for p in popups {
+		if p != keep {
+			p^ = false
 		}
 	}
 }
@@ -1387,7 +1619,10 @@ build_map_routes :: proc(app: ^App) -> []PlotRoute {
 	return routes[:]
 }
 
-build_line_series :: proc(app: ^App, x_name, y_name: string) -> []PlotSeries {
+// Builds the per-dataset series for the Line/Scatter plot. When `hue_name` is
+// non-empty, each series also carries stride-sampled hue values aligned with
+// its points; datasets without that column are skipped.
+build_line_series :: proc(app: ^App, x_name, y_name: string, hue_name := "") -> []PlotSeries {
 	rs := &app.results
 	series := make([dynamic]PlotSeries, 0, len(rs.datasets), context.temp_allocator)
 	for ds, i in rs.datasets {
@@ -1403,11 +1638,20 @@ build_line_series :: proc(app: ^App, x_name, y_name: string) -> []PlotSeries {
 		if len(pts) == 0 {
 			continue
 		}
-		append(&series, PlotSeries {
-			name = ds.name,
-			color = PLOT_COLORS[i % len(PLOT_COLORS)],
-			points = pts,
-		})
+		ps := PlotSeries {
+			name     = ds.name,
+			color    = PLOT_COLORS[i % len(PLOT_COLORS)],
+			points   = pts,
+			hue_name = hue_name,
+		}
+		if hue_name != "" {
+			hc := ds_column(ds, hue_name)
+			if hc == nil {
+				continue
+			}
+			ps.hue = ds_series_hue(ds, hc, MAX_PLOT_POINTS)
+		}
+		append(&series, ps)
 	}
 	return series[:]
 }
@@ -1546,15 +1790,63 @@ draw_raw_table :: proc(app: ^App, rect: rl.Rectangle) {
 		total_w += f64(w)
 	}
 	if total_w > f64(rect.width) {
-		rs.raw_col_scroll = clamp(rs.raw_col_scroll, 0, f32(total_w) - rect.width)
-		if rl.IsKeyDown(.LEFT_SHIFT) {
-			rs.raw_col_scroll -= rl.GetMouseWheelMove() * 30 * sc
+		max_col := f32(total_w) - rect.width
+		rs.raw_col_scroll = clamp(rs.raw_col_scroll, 0, max_col)
+
+		bar_h := 10 * sc
+		bar := rl.Rectangle{rect.x, rect.y + rect.height - bar_h - 2 * sc, rect.width, bar_h}
+		track := bar
+		thumb_w := max(rect.width * rect.width / f32(total_w), 24 * sc)
+		thumb_x := bar.x + rs.raw_col_scroll / max_col * (rect.width - thumb_w)
+		thumb := rl.Rectangle{thumb_x, bar.y, thumb_w, bar.height}
+
+		if !app.palette.open {
+			// Shift+wheel scrolls horizontally over the table area.
+			shift := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
+			if rl.GetMouseWheelMove() != 0 && shift {
+				rs.raw_col_scroll = clamp(
+					rs.raw_col_scroll - rl.GetMouseWheelMove() * WHEEL_STEP * sc,
+					0,
+					max_col,
+				)
+			}
+			// Click and drag on the scrollbar.
+			if rl.IsMouseButtonPressed(.LEFT) {
+				if rl.CheckCollisionPointRec(mouse, thumb) {
+					rs.raw_col_dragging = true
+					rs.raw_col_grab_off = mouse.x - thumb.x
+				} else if rl.CheckCollisionPointRec(mouse, track) {
+					rs.raw_col_dragging = true
+					rs.raw_col_grab_off = thumb.width * 0.5
+					rs.raw_col_scroll = clamp(
+						(mouse.x - thumb.width * 0.5 - track.x) /
+						max(track.width - thumb_w, 1) *
+						max_col,
+						0,
+						max_col,
+					)
+				}
+			}
+			if rs.raw_col_dragging && rl.IsMouseButtonDown(.LEFT) {
+				rs.raw_col_scroll = clamp(
+					(mouse.x - rs.raw_col_grab_off - track.x) /
+					max(track.width - thumb_w, 1) *
+					max_col,
+					0,
+					max_col,
+				)
+			}
+			if rl.IsMouseButtonReleased(.LEFT) {
+				rs.raw_col_dragging = false
+			}
+		} else {
+			rs.raw_col_dragging = false
 		}
-		bar := rl.Rectangle{rect.x, rect.y + rect.height - 8 * sc, rect.width, 8 * sc}
-		rl.DrawRectangleRec(bar, t.bg)
-		thumb_w := rect.width * rect.width / f32(total_w)
-		thumb_x := bar.x + rs.raw_col_scroll / (f32(total_w) - rect.width) * (rect.width - thumb_w)
-		rl.DrawRectangleRec(rl.Rectangle{thumb_x, bar.y, thumb_w, bar.height}, t.axis_x)
+
+		rl.DrawRectangleRec(track, t.bg)
+		rl.DrawRectangleLinesEx(track, 1, t.border)
+		rl.DrawRectangleRec(thumb, t.axis_x)
+		rl.DrawRectangleLinesEx(thumb, 1, t.border)
 	}
 
 	summary := fmt.ctprintf("%s · %d rows × %d cols", ds.name, ds.n_rows, len(ds.columns))

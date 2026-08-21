@@ -702,3 +702,23 @@ ds_series_xy :: proc(ds: ^Dataset, x_col, y_col: ^Column, max_points: int) -> []
 	}
 	return out[:]
 }
+
+// Stride-sampled hue values aligned with `ds_series_xy` (same stride rule) so
+// entry k corresponds to the point at index k.
+ds_series_hue :: proc(ds: ^Dataset, col: ^Column, max_points: int) -> []f64 {
+	if col == nil {
+		return nil
+	}
+	hv := ds_values(col)
+	n := min(len(hv), ds.n_rows)
+	if n == 0 {
+		return nil
+	}
+	stride := (n + max_points - 1) / max_points if n > max_points else 1
+	count := (n + stride - 1) / stride
+	out := make([]f64, count, context.temp_allocator)
+	for i := 0; i < n; i += stride {
+		out[i / stride] = hv[i]
+	}
+	return out
+}

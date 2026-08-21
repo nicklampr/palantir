@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:os"
 import "core:testing"
 import "core:time"
+import rl "vendor:raylib"
 
 YGG_RESULTS_DIR :: "/home/nick/yggdrasil/results"
 
@@ -247,4 +248,78 @@ unix_for_first_row :: proc(path: string) -> f64 {
 
 fmt_tmp_path :: proc(tag: string) -> string {
 	return fmt.tprintf("/tmp/palantir_test_%s_%d.json", tag, os.get_pid())
+}
+
+// --- hue / colormap helpers ------------------------------------------------
+
+@(test)
+test_hue_series_alignment :: proc(t: ^testing.T) {
+	tmp := fmt_tmp_path("hue")
+	defer os.remove(tmp)
+
+	content := `[{"x":0.0,"y":1.0,"h":5.0},{"x":1.0,"y":2.0,"h":7.0},{"x":2.0,"y":3.0,"h":9.0},{"x":3.0,"y":4.0,"h":11.0},{"x":4.0,"y":5.0,"h":13.0},{"x":5.0,"y":6.0,"h":15.0},{"x":6.0,"y":7.0,"h":17.0},{"x":7.0,"y":8.0,"h":19.0},{"x":8.0,"y":9.0,"h":21.0},{"x":9.0,"y":10.0,"h":23.0}]`
+	err := os.write_entire_file_from_string(tmp, content)
+	testing.expect(t, err == nil, "failed to write hue json")
+	if err != nil {return}
+
+	ds, ok := load_json_dataset(tmp, "hue")
+	if !ok {return}
+	defer free(ds)
+	defer dataset_destroy(ds)
+
+	xc := ds_column(ds, "x")
+	hc := ds_column(ds, "h")
+	testing.expect(t, xc != nil && hc != nil, "columns missing")
+	if xc == nil || hc == nil {return}
+
+	// Same stride rule -> hue must line up 1:1 with the plotted points.
+	max_points := 5
+	pts := ds_series_xy(ds, xc, hc, max_points)
+	hue := ds_series_hue(ds, hc, max_points)
+	testing.expect(t, len(hue) == len(pts), "hue length must match point count")
+	if len(hue) != len(pts) {return}
+	for k in 0 ..< len(pts) {
+		// point.y is sampled from the same index as h, so y == h at each k.
+		testing.expect(t, abs_f64(pts[k][1] - hue[k]) < 1e-9, "hue misaligned with point")
+	}
+
+	series := []PlotSeries{{points = pts, hue = hue}}
+	lo, hi, ok_dom := hue_domain_of(series)
+	testing.expect(t, ok_dom, "hue domain should be found")
+	// stride sampling visits indices 0,2,4,6,8 -> h = 5,9,13,17,21
+	testing.expect(t, abs_f64(lo - 5) < 1e-9 && abs_f64(hi - 21) < 1e-9, "hue domain bounds")
+
+	black := rl.Color{0, 0, 0, 255}
+	white := rl.Color{255, 255, 255, 255}
+	c_lo := hue_lookup(lo, hi, lo, black, white)
+	c_hi := hue_lookup(lo, hi, hi, black, white)
+	testing.expect(t, c_lo.r == 0 && c_lo.g == 0, "low hue -> low color")
+	testing.expect(t, c_hi.r == 255 && c_hi.g == 255, "high hue -> high color")
+}
+
+@(test)
+test_fuzzy_words_match :: proc(t: ^testing.T) {
+	testing.expect(t, fuzzy_words_match("latitude", ""), "empty query matches everything")
+	testing.expect(t, fuzzy_words_match("latitude", "lat"), "single term")
+	testing.expect(t, fuzzy_words_match("latitude", "LAT"), "case insensitive")
+	// every term must match somewhere in the name (order-free words)
+	testing.expect(t, fuzzy_words_match("latitude calc", "calc lat"), "all words match anywhere")
+	testing.expect(t, fuzzy_words_match("latitude", "la ti tu de"), "multi-term substring")
+	testing.expect(t, !fuzzy_words_match("latitude", "lon"), "missing term rejects")
+	testing.expect(t, !fuzzy_words_match("latitude", "lat lon"), "one missing term rejects")
+}
+
+@(test)
+test_hue_nan_ignored_in_domain :: proc(t: ^testing.T) {
+	series := []PlotSeries {
+		{
+			points = [][2]f64{{0, 0}, {1, 1}},
+			hue    = []f64{f64_nan(), 4},
+		},
+	}
+	lo, hi, ok := hue_domain_of(series)
+	testing.expect(t, ok, "domain found despite NaN")
+	// NaN excluded; the single surviving value makes a degenerate domain that
+	// hue_domain_of expands by 1 so the colormap never divides by zero.
+	testing.expect(t, lo == 4 && hi == 5, "NaN excluded; degenerate domain expanded")
 }

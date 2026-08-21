@@ -125,6 +125,7 @@ GuiCommand :: enum {
 	// Parents: open a submenu, never dispatched.
 	theme,
 	recent_files,
+	goto_folder,
 
 	// Leaves.
 	theme_rosepine,
@@ -190,6 +191,14 @@ gui_commands := [?]Palette_Command {
 		user_data = rawptr(uintptr(GuiCommand.recent_files)),
 		// Children are replaced dynamically with the current recent-file list by
 		// `refresh_palette_recents`.
+		children = nil,
+	},
+	{
+		name = "Go to folder",
+		description = "browse the current folder's subdirectories",
+		user_data = rawptr(uintptr(GuiCommand.goto_folder)),
+		// Children are replaced dynamically with the current folder listing by
+		// `refresh_palette_recents` (built by `refresh_palette_folders`).
 		children = nil,
 	},
 	{name = "Quit", description = "close the GUI", user_data = rawptr(uintptr(GuiCommand.quit))},
@@ -411,7 +420,9 @@ on_palette_select :: proc(cmd: Palette_Command) {
 	case .quit:
 		default_app.running = false
 	case:
-		if u := uintptr(cmd.user_data); u >= RECENT_CMD_BASE {
+		if u := uintptr(cmd.user_data); u >= FOLDER_CMD_BASE {
+			results_handle_folder_select(&default_app, int(u) - FOLDER_CMD_BASE)
+		} else if u >= RECENT_CMD_BASE {
 			results_open_recent(&default_app, int(u) - RECENT_CMD_BASE)
 		}
 	}
@@ -543,6 +554,96 @@ PlotSeries :: struct {
 	name:   string,
 	color:  rl.Color,
 	points: [][2]f64,
+	// Optional per-point hue values (continuous colormap coloring, seaborn
+	// style); nil = solid `color`.
+	hue:      []f64,
+	hue_name: string,
+}
+
+// Min/max hue value across every series (ignoring NaNs). ok is false when no
+// series carries hue data.
+hue_domain_of :: proc(series: []PlotSeries) -> (lo, hi: f64, ok: bool) {
+	lo = math.inf_f64(1)
+	hi = math.inf_f64(-1)
+	ok = false
+	for s in series {
+		if s.hue == nil {continue}
+		for v in s.hue {
+			if math.is_nan(v) {continue}
+			lo = min(lo, v)
+			hi = max(hi, v)
+			ok = true
+		}
+	}
+	if !ok {
+		return 0, 1, false
+	}
+	if same_value(lo, hi) {
+		hi = lo + 1
+	}
+	return lo, hi, true
+}
+
+// Continuous colormap lookup (low color -> high color) for `v` within [lo, hi].
+hue_lookup :: proc(lo, hi: f64, v: f64, low_c, high_c: rl.Color) -> rl.Color {
+	t := f32(clamp((v - lo) / (hi - lo), 0, 1))
+	return color_lerp(low_c, high_c, t)
+}
+
+// Vertical colorbar legend for the hue colormap, drawn along the right edge of
+// the plot panel (mirrors the 2D-histogram colorbar).
+draw_plot_colorbar :: proc(
+	rect, plot_area: rl.Rectangle,
+	lo, hi: f64,
+	label: string,
+	theme: Theme,
+	font_size: i32,
+	sc: f32,
+) {
+	bar_x := rect.x + rect.width - 30 * sc
+	bar := rl.Rectangle {bar_x, plot_area.y, 10 * sc, plot_area.height}
+	for iy in 0 ..< int(bar.height) {
+		t := 1 - f32(iy) / bar.height
+		col := color_lerp(theme.axis_x, theme.axis_z, t)
+		rl.DrawLine(
+			i32(bar.x),
+			i32(bar.y + f32(iy)),
+			i32(bar.x + bar.width),
+			i32(bar.y + f32(iy)),
+			col,
+		)
+	}
+	rl.DrawRectangleLinesEx(bar, 1, theme.border)
+
+	top_lbl := strings.clone_to_cstring(fmt.tprintf("%.4g", hi), context.temp_allocator)
+	bot_lbl := strings.clone_to_cstring(fmt.tprintf("%.4g", lo), context.temp_allocator)
+	top_w := f32(measure_text(top_lbl, font_size - 2))
+	bot_w := f32(measure_text(bot_lbl, font_size - 2))
+	draw_text(
+		top_lbl,
+		i32(bar.x + bar.width * 0.5 - top_w * 0.5),
+		i32(bar.y - 14 * sc),
+		font_size - 2,
+		theme.text,
+	)
+	draw_text(
+		bot_lbl,
+		i32(bar.x + bar.width * 0.5 - bot_w * 0.5),
+		i32(bar.y + bar.height + 2 * sc),
+		font_size - 2,
+		theme.text,
+	)
+
+	if len(label) > 0 {
+		lbl_c := strings.clone_to_cstring(label, context.temp_allocator)
+		lbl_size := i32(font_size - 2)
+		ts := rl.MeasureTextEx(app_font, lbl_c, f32(lbl_size), 1)
+		pos := rl.Vector2 {
+			bar.x - 6 * sc,
+			bar.y + bar.height * 0.5 + ts.x * 0.5,
+		}
+		rl.DrawTextPro(app_font, lbl_c, pos, {0, 0}, -90, f32(lbl_size), 1, theme.text)
+	}
 }
 
 plot_series :: proc(
@@ -553,6 +654,7 @@ plot_series :: proc(
 	theme: Theme,
 	font_size: i32,
 	ui_scale: f32 = 1,
+	scatter: bool = false,
 ) {
 	sc := ui_scale
 	rl.DrawRectangleRec(rect, theme.bg)
@@ -561,11 +663,34 @@ plot_series :: proc(
 	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
 	draw_text(title_cstr, i32(rect.x + 4 * sc), i32(rect.y + 2 * sc), i32(10 * sc), theme.text)
 
-	plot_area := plot_area_of(rect, lineplot_margins, sc)
+	has_hue := false
+	for ps in series {
+		if ps.hue != nil {
+			has_hue = true
+			break
+		}
+	}
+	m := lineplot_margins
+	if has_hue {
+		m = histogram2d_margins // right side holds the colorbar
+	}
+	plot_area := plot_area_of(rect, m, sc)
 
 	if len(series) == 0 {
 		draw_text("No data", i32(plot_area.x), i32(plot_area.y), i32(10 * sc), theme.text)
 		return
+	}
+
+	hue_lo, hue_hi, hue_ok := f64(0), f64(1), false
+	hue_label := ""
+	if has_hue {
+		hue_lo, hue_hi, hue_ok = hue_domain_of(series)
+		for ps in series {
+			if ps.hue != nil && len(ps.hue_name) > 0 {
+				hue_label = ps.hue_name
+				break
+			}
+		}
 	}
 
 	has_data := false
@@ -636,32 +761,54 @@ plot_series :: proc(
 	// Axis labels
 	draw_plot_axis_labels(rect, plot_area, x_label, y_label, theme, font_size, sc)
 
+	// Markers / stroke thickness scale with the UI scale so dense 4K plots
+	// still read (previously points/segments were hardcoded 3 px / 1 px).
+	line_w := max(1.0, 1.25 * sc)
+	pt_r := (3.5 if scatter else 2.25) * sc
+
 	// Data
 	for s_idx in 0 ..< len(series) {
-		color := PLOT_COLORS[s_idx % len(PLOT_COLORS)]
+		base_color := PLOT_COLORS[s_idx % len(PLOT_COLORS)]
 		pts := series[s_idx].points
-		if len(pts) < 2 {continue}
+		hue := series[s_idx].hue
+		if len(pts) == 0 {continue}
 
-		// Lines
-		for i in 0 ..< len(pts) - 1 {
-			x1 := plot_area.x + f32((pts[i][0] - x_min) / x_range) * plot_area.width
-			y1 :=
-				plot_area.y +
-				plot_area.height -
-				f32((pts[i][1] - y_min) / y_range) * plot_area.height
-			x2 := plot_area.x + f32((pts[i + 1][0] - x_min) / x_range) * plot_area.width
-			y2 :=
-				plot_area.y +
-				plot_area.height -
-				f32((pts[i + 1][1] - y_min) / y_range) * plot_area.height
-			rl.DrawLine(i32(x1), i32(y1), i32(x2), i32(y2), color)
+		if !scatter {
+			// Connecting segments, each tinted by the hue of its midpoint when
+			// a hue column is active.
+			for i in 0 ..< len(pts) - 1 {
+				x1 := plot_area.x + f32((pts[i][0] - x_min) / x_range) * plot_area.width
+				y1 :=
+					plot_area.y +
+					plot_area.height -
+					f32((pts[i][1] - y_min) / y_range) * plot_area.height
+				x2 := plot_area.x + f32((pts[i + 1][0] - x_min) / x_range) * plot_area.width
+				y2 :=
+					plot_area.y +
+					plot_area.height -
+					f32((pts[i + 1][1] - y_min) / y_range) * plot_area.height
+				col := base_color
+				if hue != nil && hue_ok && !math.is_nan(hue[i]) && !math.is_nan(hue[i + 1]) {
+					col = hue_lookup(hue_lo, hue_hi, (hue[i] + hue[i + 1]) * 0.5, theme.axis_x, theme.axis_z)
+				}
+				rl.DrawLineEx(rl.Vector2{x1, y1}, rl.Vector2{x2, y2}, line_w, col)
+			}
 		}
-		// Points
-		for p in pts {
+		// Markers
+		for p, pi in pts {
 			sx := plot_area.x + f32((p[0] - x_min) / x_range) * plot_area.width
 			sy := plot_area.y + plot_area.height - f32((p[1] - y_min) / y_range) * plot_area.height
-			rl.DrawCircle(i32(sx), i32(sy), 3, color)
+			col := base_color
+			if hue != nil && hue_ok && !math.is_nan(hue[pi]) {
+				col = hue_lookup(hue_lo, hue_hi, hue[pi], theme.axis_x, theme.axis_z)
+			}
+			rl.DrawCircleV(rl.Vector2{sx, sy}, pt_r, col)
 		}
+	}
+
+	// Colorbar legend
+	if has_hue && hue_ok {
+		draw_plot_colorbar(rect, plot_area, hue_lo, hue_hi, hue_label, theme, font_size, sc)
 	}
 
 	// Hover tooltip
@@ -671,10 +818,11 @@ plot_series :: proc(
 	   mouse.y >= plot_area.y &&
 	   mouse.y <= plot_area.y + plot_area.height {
 		best_idx := -1
+		best_k := -1
 		best_dist := f64(math.inf_f64(1))
 		best_pt: [2]f64
 		for s_idx in 0 ..< len(series) {
-			for p in series[s_idx].points {
+			for p, k in series[s_idx].points {
 				sx := plot_area.x + f32((p[0] - x_min) / x_range) * plot_area.width
 				sy :=
 					plot_area.y +
@@ -686,21 +834,28 @@ plot_series :: proc(
 				if dist < best_dist {
 					best_dist = dist
 					best_idx = s_idx
+					best_k = k
 					best_pt = p
 				}
 			}
 		}
-		threshold := f64(10 * sc)
+		threshold := f64(12 * sc)
 		if best_idx >= 0 && best_dist < threshold {
 			sx := plot_area.x + f32((best_pt[0] - x_min) / x_range) * plot_area.width
 			sy :=
 				plot_area.y +
 				plot_area.height -
 				f32((best_pt[1] - y_min) / y_range) * plot_area.height
+			hover_col := PLOT_COLORS[best_idx % len(PLOT_COLORS)]
+			if h := series[best_idx].hue; h != nil && hue_ok && best_k >= 0 && best_k < len(h) {
+				if !math.is_nan(h[best_k]) {
+					hover_col = hue_lookup(hue_lo, hue_hi, h[best_k], theme.axis_x, theme.axis_z)
+				}
+			}
 			rl.DrawCircleLines(i32(sx), i32(sy), 6 * sc, theme.text)
-			rl.DrawCircle(i32(sx), i32(sy), 3 * sc, PLOT_COLORS[best_idx % len(PLOT_COLORS)])
+			rl.DrawCircle(i32(sx), i32(sy), pt_r + 1, hover_col)
 
-			lines := [2]string{}
+			lines := [3]string{}
 			n := 0
 			if len(series[best_idx].name) > 0 {
 				lines[n] = series[best_idx].name
@@ -708,8 +863,18 @@ plot_series :: proc(
 			}
 			lines[n] = fmt.tprintf("x=%.4f  y=%.4f", best_pt[0], best_pt[1])
 			n += 1
+			if h := series[best_idx].hue; h != nil && hue_ok && best_k >= 0 && best_k < len(h) && !math.is_nan(h[best_k]) {
+				name := series[best_idx].hue_name if len(series[best_idx].hue_name) > 0 else "hue"
+				lines[n] = fmt.tprintf("%s=%.4g", name, h[best_k])
+				n += 1
+			}
 			draw_tooltip(mouse, plot_area, lines[:n], theme, font_size, sc)
 		}
+	}
+
+	// Save PNG (shared widget, see plot_export.odin).
+	if plot_save_button(app, rect, title, theme, sc) {
+		plot_export_series(app, series, title, x_label, y_label, rect, theme, font_size, sc, scatter)
 	}
 }
 
@@ -835,7 +1000,11 @@ plot_histogram :: proc(
 
 	n_bins := number_bins
 	if bins_edit != nil {
-		histogram_bin_stepper(rect, bins_edit, theme, sc)
+		// Skip the stepper during an offscreen PNG export so its +/- buttons can
+		// never catch the click that triggered the save.
+		if !app.exporting {
+			histogram_bin_stepper(rect, bins_edit, theme, sc)
+		}
 		n_bins = bins_edit^
 	}
 
@@ -946,11 +1115,16 @@ plot_histogram :: proc(
 	}
 
 	// hover tooltip
-	if hover_idx >= 0 {
+	if !app.exporting && hover_idx >= 0 {
 		lo := min_val + f32(hover_idx) * data_range / f32(n_bars)
 		hi := min_val + f32(hover_idx + 1) * data_range / f32(n_bars)
 		line := fmt.tprintf("[%.2f, %.2f)  n=%d", lo, hi, int(counts[hover_idx]))
 		draw_tooltip(mouse, plot_area, []string{line}, theme, font_size, sc)
+	}
+
+	// Save PNG (shared widget, see plot_export.odin).
+	if plot_save_button(app, rect, title, theme, sc) {
+		plot_export_histogram(app, values, title, x_label, y_label, n_bins, rect, theme, font_size, sc)
 	}
 }
 
@@ -1148,7 +1322,7 @@ plot_histogram_2d :: proc(
 	)
 
 	// hover tooltip
-	if hover_ix >= 0 {
+	if !app.exporting && hover_ix >= 0 {
 		xlo := min_x + f64(hover_ix) * x_range / f64(n_bx)
 		xhi := min_x + f64(hover_ix + 1) * x_range / f64(n_bx)
 		ylo := min_y + f64(hover_iy) * y_range / f64(n_by)
@@ -1160,6 +1334,11 @@ plot_histogram_2d :: proc(
 			fmt.tprintf("n = %d", hover_count),
 		}
 		draw_tooltip(mouse, plot_area, lines, theme, font_size, sc)
+	}
+
+	// Save PNG (shared widget, see plot_export.odin).
+	if plot_save_button(app, rect, title, theme, sc) {
+		plot_export_histogram_2d(app, points, title, x_label, y_label, number_bins_x, number_bins_y, rect, theme, font_size, sc)
 	}
 }
 
