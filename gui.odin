@@ -31,6 +31,11 @@ App :: struct {
 	ui_scale_zoom:  f32, // user-adjustable multiplier on the detected UI scale
 	ui_scale:       f32, // clamped base scale * zoom, used for all UI metrics
 	palette:        Command_Palette,
+	// True for one frame after the palette consumes input and closes, so the
+	// file browser cannot also react to the same keypress (e.g. the Enter that
+	// navigated a Ctrl+G folder selection would otherwise re-fire on the fresh
+	// listing's ".." row and bounce straight back to the parent folder).
+	palette_just_closed: bool,
 	// Results explorer state (see results_view.odin).
 	results:        Results_State,
 	// Plot PNG export feedback (see plot_export.odin).
@@ -45,6 +50,11 @@ App :: struct {
 	// rebuilt at runtime (see refresh_palette_recents).
 	palette_root:            [dynamic]Palette_Command,
 	palette_recent_children: [dynamic]Palette_Command,
+	// Palette-owned copy of the folder-navigation command list. The palette
+	// must never borrow `results.folder_cmds` directly: that list is freed and
+	// rebuilt on every folder scan, which would leave the palette pointing at
+	// freed strings (the Ctrl+G "select folder" crash).
+	palette_folder_children: [dynamic]Palette_Command,
 }
 
 App_Config :: struct {
@@ -65,8 +75,8 @@ App_Settings :: struct {
 	window_height: i32,
 	// Multiplier on the auto-detected UI scale; adjustable live with +/-/0.
 	ui_scale_zoom: f32,
-	// Recently opened result files (most recent first).
-	recent_files:  []string,
+	// Recently browsed folders (most recent first).
+	recent_folders: []string,
 }
 
 SETTINGS_PATH :: "yggdrasil_gui.json"
@@ -106,7 +116,7 @@ save_settings :: proc(app: ^App) {
 			window_width  = i32(math.round(f32(rl.GetScreenWidth()) / scl)),
 			window_height = i32(math.round(f32(rl.GetScreenHeight()) / scl)),
 			ui_scale_zoom = app.ui_scale_zoom,
-			recent_files  = app.recents,
+			recent_folders = app.recents,
 		}
 		if data, err := json.marshal(s); err == nil {
 			defer delete(data)
@@ -172,7 +182,7 @@ gui_commands := [?]Palette_Command {
 	},
 	{
 		name = "Open recents",
-		description = "open the recent files view",
+		description = "open the recent folders view",
 		user_data = rawptr(uintptr(GuiCommand.open_recents)),
 	},
 	{
@@ -186,10 +196,10 @@ gui_commands := [?]Palette_Command {
 		user_data = rawptr(uintptr(GuiCommand.refresh_plots)),
 	},
 	{
-		name = "Recent files",
-		description = "recently opened result files",
+		name = "Recent folders",
+		description = "recently browsed folders",
 		user_data = rawptr(uintptr(GuiCommand.recent_files)),
-		// Children are replaced dynamically with the current recent-file list by
+		// Children are replaced dynamically with the current recent-folder list by
 		// `refresh_palette_recents`.
 		children = nil,
 	},
@@ -252,7 +262,7 @@ app_init :: proc(app: ^App, config := App_Config{}) {
 	app.ui_scale = clamp(detect_base_ui_scale() * app.ui_scale_zoom, UI_SCALE_MIN, UI_SCALE_MAX)
 	app.palette.ui_scale = app.ui_scale
 
-	app.recents = settings.recent_files
+	app.recents = settings.recent_folders
 	results_init(app)
 	cwd, _ := os.get_working_directory(context.temp_allocator)
 	results_set_root(app, cwd)
@@ -273,7 +283,16 @@ app_shutdown :: proc(app: ^App) {
 	}
 	delete(app.recents)
 	delete(app.palette_root)
+	for c in app.palette_recent_children {
+		delete(c.name)
+		delete(c.description)
+	}
 	delete(app.palette_recent_children)
+	for fc in app.palette_folder_children {
+		delete(fc.name)
+		delete(fc.description)
+	}
+	delete(app.palette_folder_children)
 	palette_destroy(&app.palette)
 	unload_app_font()
 	rl.CloseWindow()
@@ -295,7 +314,11 @@ app_update :: proc(app: ^App) {
 		app.recents_dirty = false
 	}
 	palette_toggle_on_shortcut(&app.palette)
+	// Capture whether the palette owned this frame's input before it runs; if it
+	// closes here, the rest of the frame must not act on the same keypresses.
+	palette_was_open := app.palette.open
 	palette_update(&app.palette)
+	app.palette_just_closed = palette_was_open && !app.palette.open
 	handle_ui_zoom(app)
 
 	rl.BeginDrawing()

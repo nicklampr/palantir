@@ -215,9 +215,33 @@ palette_update :: proc(p: ^Command_Palette) {
 	}
 	p.selected = clamp(p.selected, 0, max(0, n - 1))
 
+	// Tab autocompletes the query to the currently selected entry's name
+	// (used in the folder-navigation palette and every submenu).
+	if rl.IsKeyPressed(.TAB) && n > 0 {
+		palette_complete_selected(p)
+	}
+
 	if rl.IsKeyPressed(.ENTER) && n > 0 {
 		palette_activate(p, p.matches[p.selected])
 	}
+}
+
+// Replaces the palette query with the selected entry's name and re-filters.
+// Lets Tab complete e.g. a partial folder name in the Ctrl+G folder view.
+palette_complete_selected :: proc(p: ^Command_Palette) {
+	if len(p.matches) == 0 {
+		return
+	}
+	selected := clamp(p.selected, 0, len(p.matches) - 1)
+	cmd := p.commands[p.matches[selected]]
+	if len(cmd.name) == 0 || len(cmd.name) > PALETTE_QUERY_CAP {
+		return
+	}
+	for i in 0 ..< len(cmd.name) {
+		p.query[i] = cmd.name[i]
+	}
+	p.query_len = len(cmd.name)
+	palette_refresh_matches(p)
 }
 
 // Activates the selected entry. Commands with children push a submenu layer;

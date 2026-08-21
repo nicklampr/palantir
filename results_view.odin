@@ -232,11 +232,30 @@ refresh_palette_folders :: proc(app: ^App) {
 // Esc takes you back to the normal palette.
 open_folder_palette :: proc(app: ^App) {
 	refresh_palette_folders(app)
+	// Copy the folder list into a palette-owned buffer. `folder_cmds` is freed
+	// and rebuilt on every `results_scan`; pointing the palette at it directly
+	// would leave `commands` referencing freed strings the moment a folder is
+	// selected (the Ctrl+G crash).
+	for fc in app.palette_folder_children {
+		delete(fc.name)
+		delete(fc.description)
+	}
+	clear(&app.palette_folder_children)
+	for fc in app.results.folder_cmds {
+		append(&app.palette_folder_children, Palette_Command {
+			name        = strings.clone(fc.name),
+			description = strings.clone(fc.description),
+			user_data   = fc.user_data,
+		})
+	}
 	palette_open_it(&app.palette)
-	if len(app.results.folder_cmds) > 0 {
+	if len(app.palette_folder_children) > 0 {
 		palette_push_layer(&app.palette)
-		app.palette.commands = app.results.folder_cmds[:]
+		app.palette.commands = app.palette_folder_children[:]
 		palette_reset(&app.palette)
+		// Populate matches now so the folder list draws immediately instead of
+		// showing "No command found" for one frame.
+		palette_refresh_matches(&app.palette)
 	}
 }
 
@@ -252,14 +271,21 @@ results_handle_folder_select :: proc(app: ^App, idx: int) {
 
 results_set_root :: proc(app: ^App, path: string) {
 	rs := &app.results
+	// Snapshot `path` before mutating anything: callers may pass a slice that
+	// lives inside `rs.root` (results_go_up) or inside `app.recents`
+	// (results_open_recent), both of which are freed below / in
+	// results_add_recent_folder. Reading `path` after that is a use-after-free.
+	new_root := strings.clone(path)
 	if rs.root != "" {
 		delete(rs.root)
 	}
-	rs.root = strings.clone(path)
+	rs.root = new_root
+	// Remember the folder so the Recents view shows recent folders.
+	results_add_recent_folder(app, new_root)
 	// Keep the path input box in sync with the current folder.
-	rs.path_len = min(len(path), len(rs.path_buf) - 1)
+	rs.path_len = min(len(new_root), len(rs.path_buf) - 1)
 	for i in 0 ..< rs.path_len {
-		rs.path_buf[i] = path[i]
+		rs.path_buf[i] = new_root[i]
 	}
 	rs.path_buf[rs.path_len] = 0
 	results_scan(app)
@@ -304,7 +330,6 @@ results_open_path :: proc(app: ^App, path: string) {
 		if ds, ok := load_dataset(path); ok {
 			append(&rs.datasets, ds)
 			rs.active_ds = len(rs.datasets) - 1
-			results_add_recent(app, path)
 			results_compute_raw_widths(app)
 		} else {
 			results_msg(app, fmt.aprintf("Failed to load %s", file_base_name(path)))
@@ -323,6 +348,26 @@ results_go_up :: proc(app: ^App) {
 		return
 	}
 	results_set_root(app, parent)
+}
+
+// Backspace handler for the path input box. When the path sits at a folder
+// boundary (trailing '/'), it removes the last segment and navigates up one
+// folder, returning true to suppress character deletion. Otherwise it returns
+// false so the box deletes a character normally.
+path_input_backspace :: proc(app: ^App, text: string) -> bool {
+	if len(text) == 0 || text[len(text) - 1] != '/' {
+		return false
+	}
+	stripped := text[:len(text) - 1]
+	if len(stripped) == 0 {
+		return true // at the filesystem root; consume the key
+	}
+	parent := filepath.dir(stripped)
+	if parent == stripped {
+		return true // no parent to go to; consume the key
+	}
+	results_set_root(app, parent)
+	return true
 }
 
 // Auto-completes the path input on Tab. Completes the last path segment against
@@ -496,7 +541,6 @@ results_sync_datasets :: proc(app: ^App) {
 		}
 		if ds, ok := load_dataset(w); ok {
 			append(&rs.datasets, ds)
-			results_add_recent(app, w)
 		} else {
 			results_msg(app, fmt.aprintf("Failed to load %s", file_base_name(w)))
 		}
@@ -512,11 +556,21 @@ results_sync_datasets :: proc(app: ^App) {
 
 // --- recents -----------------------------------------------------------------
 
-results_add_recent :: proc(app: ^App, path: string) {
-	// Dedup: collect the surviving entries (everything except `path`).
+// Records a browsed folder in the recents list (most recent first, deduped,
+// capped at RECENT_MAX). Called on every folder navigation so the Recents view
+// remembers folders, not result files.
+results_add_recent_folder :: proc(app: ^App, folder: string) {
+	if len(folder) == 0 {
+		return
+	}
+	// Snapshot the folder: it may point into `app.recents` (results_open_recent),
+	// and the dedup `delete(p)` below frees that exact buffer before we re-add it.
+	owned := strings.clone(folder)
+	defer delete(owned)
+	// Dedup: collect the surviving entries (everything except `owned`).
 	survivors := make([dynamic]string, 0, len(app.recents), context.temp_allocator)
 	for p in app.recents {
-		if p != path {
+		if p != owned {
 			append(&survivors, p)
 		} else {
 			delete(p)
@@ -527,7 +581,7 @@ results_add_recent :: proc(app: ^App, path: string) {
 
 	new_len := min(len(survivors) + 1, RECENT_MAX)
 	out := make([]string, new_len, context.allocator)
-	out[0] = strings.clone(path)
+	out[0] = strings.clone(owned)
 	n := 1
 	for s in survivors {
 		if n >= new_len {
@@ -546,24 +600,14 @@ results_open_recent :: proc(app: ^App, idx: int) {
 	if idx < 0 || idx >= len(app.recents) {
 		return
 	}
-	path := app.recents[idx]
-	if !os.exists(path) {
-		results_msg(app, "File no longer exists")
+	folder := app.recents[idx]
+	if !os.exists(folder) {
+		results_msg(app, "Folder no longer exists")
 		return
 	}
-	// Switch the browser to the file's folder and select it.
-	dir := filepath.dir(path)
-	results_set_root(app, dir)
-	rs := &app.results
-	for e, i in rs.entries {
-		if !e.is_dir && e.path == path {
-			results_select_only(app, i)
-			break
-		}
-	}
-	rs.active_ds = len(rs.datasets) - 1 if len(rs.datasets) > 0 else -1
-	rs.show_recents = false
-	results_compute_raw_widths(app)
+	// Browse into the remembered folder.
+	results_set_root(app, folder)
+	app.results.show_recents = false
 }
 
 results_clear_recents :: proc(app: ^App) {
@@ -664,11 +708,17 @@ results_handle_shortcuts :: proc(app: ^App) {
 // --- palette recents submenu -------------------------------------------------
 
 refresh_palette_recents :: proc(app: ^App) {
+	// The palette owns its recent entries (clones), so it never borrows
+	// `app.recents` strings that get freed/reallocated on navigation.
+	for c in app.palette_recent_children {
+		delete(c.name)
+		delete(c.description)
+	}
 	clear(&app.palette_recent_children)
 	for p, i in app.recents {
 		append(&app.palette_recent_children, Palette_Command {
-			name = file_base_name(p),
-			description = p,
+			name = strings.clone(file_base_name(p)),
+			description = strings.clone(p),
 			user_data = rawptr(uintptr(RECENT_CMD_BASE + i)),
 		})
 	}
@@ -744,12 +794,15 @@ draw_results_view :: proc(app: ^App) {
 	refresh_rect := rl.Rectangle{recents_rect.x + recents_rect.width + 6 * sc, top + 8 * sc, 90 * sc, 30 * sc}
 
 	if draw_text_input(
+		app,
 		path_rect,
 		rs.path_buf[:],
 		&rs.path_len,
 		&rs.path_edit,
 		t,
 		sc,
+		nil,
+		path_input_backspace,
 	) {
 		rs.text_enter = true
 		path := strings.trim_space(string(rs.path_buf[:rs.path_len]))
@@ -868,7 +921,7 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 	// Search box filters the listing to matching dirs, .csv and .json files.
 	search_h := 28 * sc
 	search_rect := rl.Rectangle{panel.x + 8 * sc, panel.y + title_h + 2 * sc, panel.width - 16 * sc, search_h}
-	if draw_text_input(search_rect, rs.search_buf[:], &rs.search_len, &rs.search_edit, t, sc, "Search files (Ctrl+F)") {
+	if draw_text_input(app, search_rect, rs.search_buf[:], &rs.search_len, &rs.search_edit, t, sc, "Search files (Ctrl+F)") {
 		rs.text_enter = true
 	}
 
@@ -892,7 +945,7 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 	// Keyboard navigation (gated so it never fights the palette, the path
 	// input, the search box, an open dropdown, or an Enter a text box just
 	// consumed this frame).
-	if !app.palette.open && !rs.path_edit && !rs.search_edit && !rs.text_enter && !results_any_dropdown_open(rs) {
+	if !app.palette.open && !app.palette_just_closed && !rs.path_edit && !rs.search_edit && !rs.text_enter && !results_any_dropdown_open(rs) {
 		if total_rows > 0 && rl.IsKeyPressed(.DOWN) {
 			rs.file_cursor = min(rs.file_cursor + 1, total_rows - 1)
 		}
@@ -900,6 +953,9 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 			rs.file_cursor = max(rs.file_cursor - 1, 0)
 		}
 		if rl.IsKeyPressed(.LEFT) {
+			results_go_up(app)
+		}
+		if rl.IsKeyPressed(.BACKSPACE) {
 			results_go_up(app)
 		}
 		if rl.IsKeyPressed(.RIGHT) || rl.IsKeyPressed(.ENTER) {
@@ -1035,7 +1091,7 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 	rl.DrawRectangleLinesEx(panel, 1, s.border)
 
 	title_h := 26 * sc
-	draw_text("Recent files", c.int(panel.x + 8 * sc), c.int(panel.y + 6 * sc), i32(15 * sc), t.text)
+	draw_text("Recent folders", c.int(panel.x + 8 * sc), c.int(panel.y + 6 * sc), i32(15 * sc), t.text)
 
 	clear_rect := rl.Rectangle{panel.x + panel.width - 92 * sc, panel.y + 4 * sc, 84 * sc, 22 * sc}
 	if draw_button(clear_rect, "Clear", t, sc) {
@@ -1059,7 +1115,7 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 	row_h := 30 * sc
 	if len(app.recents) == 0 {
 		row := ui_alloc(&u, row_h)
-		draw_text("No recent files yet", c.int(row.x + 8 * sc), c.int(row.y + 6 * sc), i32(13 * sc), rl.Fade(t.text, 0.5))
+		draw_text("No recent folders yet", c.int(row.x + 8 * sc), c.int(row.y + 6 * sc), i32(13 * sc), rl.Fade(t.text, 0.5))
 	}
 	for p, i in app.recents {
 		row := ui_alloc(&u, row_h, 2 * sc)
@@ -1918,8 +1974,11 @@ draw_button :: proc(rect: rl.Rectangle, label: cstring, theme: Theme, sc: f32) -
 }
 
 // Minimal text input. Returns true when Enter is pressed. `hint` (optional) is
-// shown faded when the box is empty and not being edited.
+// shown faded when the box is empty and not being edited. When `on_backspace`
+// is provided and returns true, the Backspace is considered handled (e.g. the
+// caller navigated up a folder) and no character is deleted.
 draw_text_input :: proc(
+	app: ^App,
 	rect: rl.Rectangle,
 	buf: []u8,
 	length: ^int,
@@ -1927,6 +1986,7 @@ draw_text_input :: proc(
 	theme: Theme,
 	sc: f32,
 	hint: cstring = nil,
+	on_backspace: proc(app: ^App, text: string) -> bool = nil,
 ) -> bool {
 	mouse := rl.GetMousePosition()
 	hover := rl.CheckCollisionPointRec(mouse, rect)
@@ -1951,9 +2011,13 @@ draw_text_input :: proc(
 				length^ += 1
 			}
 		}
-		if rl.IsKeyPressed(.BACKSPACE) && length^ > 0 {
-			length^ -= 1
-			buf[length^] = 0
+		if rl.IsKeyPressed(.BACKSPACE) {
+			if on_backspace != nil && on_backspace(app, string(buf[:length^])) {
+				// handled (navigation); do not delete a character
+			} else if length^ > 0 {
+				length^ -= 1
+				buf[length^] = 0
+			}
 		}
 	}
 

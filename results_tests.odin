@@ -207,6 +207,317 @@ test_open_path_handling :: proc(t: ^testing.T) {
 	delete(app.recents)
 }
 
+@(test)
+test_folder_palette_selection :: proc(t: ^testing.T) {
+	app: App
+	results_init(&app)
+	palette_init(&app.palette, nil, nil)
+	defer results_destroy(&app)
+	defer palette_destroy(&app.palette)
+	defer {
+		for p in app.recents {delete(p)}
+		delete(app.recents)
+		for fc in app.palette_folder_children {
+			delete(fc.name)
+			delete(fc.description)
+		}
+		delete(app.palette_folder_children)
+	}
+
+	base := fmt.tprintf("/tmp/palantir_folder_test_%d", os.get_pid())
+	sub := fmt.tprintf("%s/subdir", base)
+	testing.expect(t, os.make_directory(base) == nil, "create temp dir")
+	testing.expect(t, os.make_directory(sub) == nil, "create temp subdir")
+	defer {
+		os.remove_all(sub)
+		os.remove_all(base)
+	}
+
+	results_set_root(&app, base)
+	testing.expect(t, len(app.recents) >= 1, "browsed folder should be recorded as a recent")
+	if len(app.recents) >= 1 {
+		testing.expect(t, app.recents[0] == base, "most recent folder is the browsed root")
+	}
+
+	open_folder_palette(&app)
+	testing.expect(t, app.palette.open, "palette should be open")
+	testing.expect(t, len(app.palette_folder_children) > 0, "folder list copied into the palette")
+	if len(app.palette_folder_children) == 0 {
+		return
+	}
+	// The palette must own a copy, never borrow `results.folder_cmds`, so that
+	// selecting a folder (which rescans and rebuilds folder_cmds) can't dangle.
+	testing.expect(
+		t,
+		&app.palette_folder_children[0] != &app.results.folder_cmds[0],
+		"palette must own a copy of the folder list",
+	)
+
+	// Selecting the parent entry ("..") must navigate without dangling.
+	results_handle_folder_select(&app, 0)
+	testing.expect(t, app.results.root == "/tmp", "navigated to parent folder")
+}
+
+@(test)
+test_path_completion :: proc(t: ^testing.T) {
+	app: App
+	results_init(&app)
+	defer results_destroy(&app)
+	defer {
+		for p in app.recents {delete(p)}
+		delete(app.recents)
+	}
+
+	base := fmt.tprintf("/tmp/palantir_complete_test_%d", os.get_pid())
+	sub := fmt.tprintf("%s/subdir_unique", base)
+	testing.expect(t, os.make_directory(base) == nil, "create temp dir")
+	testing.expect(t, os.make_directory(sub) == nil, "create temp subdir")
+	defer {
+		os.remove_all(sub)
+		os.remove_all(base)
+	}
+
+	results_set_root(&app, base)
+
+	// Type a partial segment and Tab-complete it against the browsed folder.
+	prefix := "subdir_un"
+	for i in 0 ..< len(prefix) {
+		app.results.path_buf[i] = prefix[i]
+	}
+	app.results.path_len = len(prefix)
+	app.results.path_buf[app.results.path_len] = 0
+
+	results_complete_path(&app)
+	completed := string(app.results.path_buf[:app.results.path_len])
+	testing.expect(t, completed == "subdir_unique/", "tab completes a unique directory with a trailing slash")
+}
+
+@(test)
+test_recent_folder_navigation :: proc(t: ^testing.T) {
+	app: App
+	results_init(&app)
+	defer results_destroy(&app)
+	defer {
+		for p in app.recents {delete(p)}
+		delete(app.recents)
+	}
+
+	base := fmt.tprintf("/tmp/palantir_recent_test_%d", os.get_pid())
+	testing.expect(t, os.make_directory(base) == nil, "create temp dir")
+	defer os.remove_all(base)
+
+	// First navigation records the folder.
+	results_set_root(&app, base)
+	testing.expect(t, len(app.recents) == 1 && app.recents[0] == base, "root recorded as a recent folder")
+
+	// Opening that recent passes a slice into app.recents; it must not crash
+	// (regression for the use-after-free) and must navigate to the folder.
+	results_open_recent(&app, 0)
+	testing.expect(t, app.results.root == base, "recent folder navigated")
+	testing.expect(t, len(app.recents) >= 1 && app.recents[0] == base, "recents remain valid")
+}
+
+@(test)
+test_go_up_no_uaf :: proc(t: ^testing.T) {
+	app: App
+	results_init(&app)
+	defer results_destroy(&app)
+	defer {
+		for p in app.recents {delete(p)}
+		delete(app.recents)
+	}
+
+	base := fmt.tprintf("/tmp/palantir_up_test_%d", os.get_pid())
+	sub := fmt.tprintf("%s/sub", base)
+	testing.expect(t, os.make_directory(base) == nil, "create temp dir")
+	testing.expect(t, os.make_directory(sub) == nil, "create temp subdir")
+	defer {
+		os.remove_all(sub)
+		os.remove_all(base)
+	}
+
+	results_set_root(&app, sub)
+	testing.expect(t, app.results.root == sub, "root is the nested folder")
+	results_go_up(&app)
+	testing.expect(t, app.results.root == base, "go up navigates to parent")
+}
+
+@(test)
+test_palette_tab_complete :: proc(t: ^testing.T) {
+	p: Command_Palette
+	defer palette_destroy(&p)
+	cmds := [?]Palette_Command {
+		{name = "subdir", description = "a folder"},
+		{name = "..", description = "parent"},
+	}
+	palette_init(&p, cmds[:], nil)
+	palette_open_it(&p)
+	palette_refresh_matches(&p)
+	testing.expect(t, len(p.matches) == 2, "empty query matches every command")
+	p.selected = 0
+	palette_complete_selected(&p)
+	testing.expect(t, palette_query_string(&p) == "subdir", "tab completes the query to the selected name")
+}
+
+@(test)
+test_path_backspace_boundary :: proc(t: ^testing.T) {
+	app: App
+	results_init(&app)
+	defer results_destroy(&app)
+	defer {
+		for p in app.recents {delete(p)}
+		delete(app.recents)
+	}
+
+	base := fmt.tprintf("/tmp/palantir_bs_test_%d", os.get_pid())
+	sub := fmt.tprintf("%s/sub", base)
+	testing.expect(t, os.make_directory(base) == nil, "create temp dir")
+	testing.expect(t, os.make_directory(sub) == nil, "create temp subdir")
+	defer {
+		os.remove_all(sub)
+		os.remove_all(base)
+	}
+
+	results_set_root(&app, base)
+	// Simulate the path box holding "<base>/sub/".
+	text := fmt.tprintf("%s/", sub)
+	app.results.path_len = 0
+	for i in 0 ..< len(text) {
+		app.results.path_buf[i] = text[i]
+	}
+	app.results.path_len = len(text)
+	app.results.path_buf[app.results.path_len] = 0
+
+	handled := path_input_backspace(&app, string(app.results.path_buf[:app.results.path_len]))
+	testing.expect(t, handled, "backspace at a folder boundary is handled")
+	testing.expect(t, app.results.root == base, "backspace navigated up to the parent")
+}
+
+@(test)
+test_folder_palette_real_select :: proc(t: ^testing.T) {
+	// Drive the exact GUI path: the palette's on_select is `on_palette_select`,
+	// which dispatches on the global `default_app`. Set it up and reset after.
+	default_app = {}
+	defer default_app = {}
+	app := &default_app
+
+	results_init(app)
+	palette_init(&app.palette, nil, on_palette_select)
+	defer {
+		results_destroy(app)
+		palette_destroy(&app.palette)
+		for p in app.recents {delete(p)}
+		delete(app.recents)
+		delete(app.palette_root)
+		for c in app.palette_recent_children {
+			delete(c.name)
+			delete(c.description)
+		}
+		delete(app.palette_recent_children)
+		for fc in app.palette_folder_children {
+			delete(fc.name)
+			delete(fc.description)
+		}
+		delete(app.palette_folder_children)
+	}
+
+	base := fmt.tprintf("/tmp/palantir_real_pal_%d", os.get_pid())
+	sub1 := fmt.tprintf("%s/sub1", base)
+	testing.expect(t, os.make_directory(base) == nil, "create temp dir")
+	testing.expect(t, os.make_directory(sub1) == nil, "create temp subdir")
+	defer {
+		os.remove_all(sub1)
+		os.remove_all(base)
+	}
+
+	results_set_root(app, base)
+	open_folder_palette(app)
+	testing.expect(t, app.palette.open, "palette open")
+	testing.expect(t, len(app.palette_folder_children) >= 2, "folder list has parent + subdirs")
+
+	// Select the first subdirectory entry (".." is index 0) via palette_activate,
+	// the same code path an Enter press takes.
+	app.palette.selected = 1
+	palette_refresh_matches(&app.palette)
+	testing.expect(t, len(app.palette.matches) >= 2, "matches reflect the folder list")
+	palette_activate(&app.palette, app.palette.matches[1])
+	testing.expect(t, app.results.root == sub1, "folder palette navigated into the selected subdirectory")
+
+	// Simulate the next frame's recents_dirty handling (runs while the palette's
+	// layer stack is still non-empty after the select closed it).
+	refresh_palette_recents(app)
+
+	// Re-open and select again (repeated Ctrl+G cycles).
+	results_set_root(app, base)
+	open_folder_palette(app)
+	if len(app.palette_folder_children) >= 2 {
+		app.palette.selected = 1
+		palette_refresh_matches(&app.palette)
+		if len(app.palette.matches) >= 2 {
+			palette_activate(&app.palette, app.palette.matches[1])
+		}
+	}
+	testing.expect(t, true, "repeated folder palette selects did not crash")
+}
+
+// Stress-tests repeated Ctrl+G folder-palette open/select cycles (selecting
+// every option, resetting, and running the recents rebuild) to flush out any
+// double-free or use-after-free in the folder-palette lifetime handling.
+@(test)
+test_folder_palette_stress :: proc(t: ^testing.T) {
+	default_app = {}
+	defer default_app = {}
+	app := &default_app
+	results_init(app)
+	palette_init(&app.palette, nil, on_palette_select)
+	defer {
+		results_destroy(app)
+		palette_destroy(&app.palette)
+		for p in app.recents {delete(p)}
+		delete(app.recents)
+		delete(app.palette_root)
+		for c in app.palette_recent_children {
+			delete(c.name)
+			delete(c.description)
+		}
+		delete(app.palette_recent_children)
+		for fc in app.palette_folder_children {
+			delete(fc.name)
+			delete(fc.description)
+		}
+		delete(app.palette_folder_children)
+	}
+
+	base := fmt.tprintf("/tmp/palantir_stress_%d", os.get_pid())
+	sub1 := fmt.tprintf("%s/sub1", base)
+	sub2 := fmt.tprintf("%s/sub2", base)
+	testing.expect(t, os.make_directory(base) == nil, "create temp dir")
+	testing.expect(t, os.make_directory(sub1) == nil, "create sub1")
+	testing.expect(t, os.make_directory(sub2) == nil, "create sub2")
+	defer {
+		os.remove_all(sub1)
+		os.remove_all(sub2)
+		os.remove_all(base)
+	}
+
+	for round in 0 ..< 20 {
+		results_set_root(app, base)
+		open_folder_palette(app)
+		n := len(app.palette_folder_children)
+		for j := 0; j < n; j += 1 {
+			results_set_root(app, base)
+			open_folder_palette(app)
+			app.palette.selected = j
+			palette_refresh_matches(&app.palette)
+			if j < len(app.palette.matches) {
+				palette_activate(&app.palette, app.palette.matches[j])
+			}
+			refresh_palette_recents(app)
+		}
+	}
+	testing.expect(t, true, "folder palette stress cycles completed without memory errors")
+}
+
 // --- tiny test helpers ------------------------------------------------------
 
 math_is_nan :: proc(v: f64) -> bool {
