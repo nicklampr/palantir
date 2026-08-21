@@ -102,6 +102,9 @@ Command_Palette :: struct {
 	layer_stack:   [dynamic]Palette_Layer,
 	// scratch buffer reused every frame so filtering doesn't allocate.
 	matches:       [dynamic]int,
+	// When a select handler sets this, the palette stays open after the leaf is
+	// activated (used to jump straight into a submenu e.g. folder navigation).
+	stay_open:     bool,
 	// HiDPI/4K UI scale factor; multiply pixel metrics by this when drawing.
 	ui_scale:      f32,
 }
@@ -230,7 +233,10 @@ palette_activate :: proc(p: ^Command_Palette, command_index: int) {
 	if p.on_select != nil {
 		p.on_select(cmd)
 	}
-	palette_close(p)
+	if !p.stay_open {
+		palette_close(p)
+	}
+	p.stay_open = false
 }
 
 // Captures the current layer so Esc can return to it.

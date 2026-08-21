@@ -190,9 +190,8 @@ results_scan :: proc(app: ^App) {
 	rs.entries = entries[:] // dynamic backing is now owned by rs.entries
 	rs.file_cursor = 0
 	results_clear_msg(app)
-	// Keep the palette's folder/recents trees in sync with the new listing.
+	// Keep the palette's folder-navigation list in sync with the new listing.
 	refresh_palette_folders(app)
-	refresh_palette_recents(app)
 }
 
 // Rebuilds the folder-navigation command list for the current root: a ".."
@@ -676,12 +675,8 @@ refresh_palette_recents :: proc(app: ^App) {
 	clear(&app.palette_root)
 	for cmd in gui_commands {
 		c := cmd
-		switch GuiCommand(uintptr(c.user_data)) {
-		case .recent_files:
+		if GuiCommand(uintptr(c.user_data)) == .recent_files {
 			c.children = app.palette_recent_children[:]
-		case .goto_folder:
-			c.children = app.results.folder_cmds[:]
-		case:
 		}
 		append(&app.palette_root, c)
 	}

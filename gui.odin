@@ -197,9 +197,6 @@ gui_commands := [?]Palette_Command {
 		name = "Go to folder",
 		description = "browse the current folder's subdirectories",
 		user_data = rawptr(uintptr(GuiCommand.goto_folder)),
-		// Children are replaced dynamically with the current folder listing by
-		// `refresh_palette_recents` (built by `refresh_palette_folders`).
-		children = nil,
 	},
 	{name = "Quit", description = "close the GUI", user_data = rawptr(uintptr(GuiCommand.quit))},
 }
@@ -417,6 +414,10 @@ on_palette_select :: proc(cmd: Palette_Command) {
 		results_focus_search(&default_app)
 	case .refresh_plots:
 		results_refresh(&default_app)
+	case .goto_folder:
+		// Keep the palette open while transitioning into the folder list.
+		default_app.palette.stay_open = true
+		open_folder_palette(&default_app)
 	case .quit:
 		default_app.running = false
 	case:
