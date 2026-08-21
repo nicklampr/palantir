@@ -328,7 +328,6 @@ app_update :: proc(app: ^App) {
 	draw_results_view(app)
 
 	palette_draw(&app.palette, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()))
-	draw_ui_scale(app)
 	rl.EndDrawing()
 
 	free_all(context.temp_allocator)
@@ -395,25 +394,6 @@ UI_SCALE_MIN :: 0.5
 UI_SCALE_MAX :: 4.0
 UI_SCALE_STEP :: 1.15
 
-// Small "UI 150%" readout in the top-right corner; +/-/0 adjust it.
-draw_ui_scale :: proc(app: ^App) {
-	s := app.palette.style
-	sc := app.ui_scale
-	sw := f32(rl.GetScreenWidth())
-	sh := f32(rl.GetScreenHeight())
-	panel_h := f32(s.row_height + 8 * i32(sc))
-
-	label := fmt.ctprintf("UI %d%%", int(app.ui_scale * 100 + 0.5))
-	text_w := f32(measure_text(label, s.font_size - 4))
-	panel_w := text_w + 24 * sc
-	// sit in the top-right corner
-	y := 6 * sc
-	panel := rl.Rectangle{sw - panel_w - 8 * sc, y, panel_w, panel_h}
-	rl.DrawRectangleRec(panel, s.panel)
-	rl.DrawRectangleLinesEx(panel, 2, s.border)
-	draw_text(label, c.int(panel.x + 12 * sc), c.int(panel.y + 7 * sc), s.font_size - 4, s.hint)
-}
-
 app_resize :: proc(app: ^App, w, h: int) {
 	rl.SetWindowSize(c.int(w), c.int(h))
 }
@@ -445,9 +425,9 @@ on_palette_select :: proc(cmd: Palette_Command) {
 		default_app.running = false
 	case:
 		if u := uintptr(cmd.user_data); u >= FOLDER_CMD_BASE {
-			results_handle_folder_select(&default_app, int(u) - FOLDER_CMD_BASE)
+			results_handle_folder_select(&default_app, cmd.description)
 		} else if u >= RECENT_CMD_BASE {
-			results_open_recent(&default_app, int(u) - RECENT_CMD_BASE)
+			results_open_folder(&default_app, cmd.description)
 		}
 	}
 }
@@ -565,11 +545,13 @@ draw_tooltip :: proc(
 		tip_y = mouse.y + 12 * sc
 	}
 
-	rl.DrawRectangle(i32(tip_x), i32(tip_y), i32(tip_w), i32(tip_h), rl.Color{40, 40, 50, 230})
-	rl.DrawRectangleLinesEx({tip_x, tip_y, tip_w, tip_h}, 1, theme.text)
+	tip := rl.Rectangle{tip_x, tip_y, tip_w, tip_h}
+	draw_shadow(tip, sc, UI_RADIUS_SM * sc)
+	draw_fill_rounded(tip, theme.bg, UI_RADIUS_SM * sc)
+	draw_stroke_rounded(tip, theme.border, UI_RADIUS_SM * sc, 1)
 	y_off := tip_y + pad
 	for cstr in cstrs {
-		rl.DrawTextEx(app_font, cstr, rl.Vector2{tip_x + pad, y_off}, fs, 1, rl.WHITE)
+		rl.DrawTextEx(app_font, cstr, rl.Vector2{tip_x + pad, y_off}, fs, 1, theme.text)
 		y_off += line_h + 2
 	}
 }
@@ -681,11 +663,10 @@ plot_series :: proc(
 	scatter: bool = false,
 ) {
 	sc := ui_scale
-	rl.DrawRectangleRec(rect, theme.bg)
-	rl.DrawRectangleLinesEx(rect, 1, theme.border)
+	draw_fill_rounded(rect, theme.window_bg, UI_RADIUS_SM * sc)
 
 	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
-	draw_text(title_cstr, i32(rect.x + 4 * sc), i32(rect.y + 2 * sc), i32(10 * sc), theme.text)
+	draw_text(title_cstr, i32(rect.x + 8 * sc), i32(rect.y + 4 * sc), i32(11 * sc), theme.muted)
 
 	has_hue := false
 	for ps in series {
@@ -965,9 +946,9 @@ histogram_bin_stepper :: proc(rect: rl.Rectangle, bins: ^int, theme: Theme, sc: 
 	draw_step_btn :: proc(r: rl.Rectangle, sym: cstring, theme: Theme, sc: f32) -> bool {
 		mouse := rl.GetMousePosition()
 		hover := rl.CheckCollisionPointRec(mouse, r)
-		bg := theme.axis_x if hover else theme.bg
-		rl.DrawRectangleRec(r, bg)
-		rl.DrawRectangleLinesEx(r, 1, theme.border)
+		radius := 4 * sc
+		draw_fill_rounded(r, theme.hover if hover else theme.bg, radius)
+		draw_stroke_rounded(r, theme.border, radius, 1)
 		tw := f32(measure_text(sym, i32(11 * sc)))
 		draw_text(
 			sym,
@@ -993,8 +974,8 @@ histogram_bin_stepper :: proc(rect: rl.Rectangle, bins: ^int, theme: Theme, sc: 
 			bins^ += 1
 		}
 	}
-	rl.DrawRectangleRec(label_rect, theme.bg)
-	rl.DrawRectangleLinesEx(label_rect, 1, theme.border)
+	draw_fill_rounded(label_rect, theme.bg, 4 * sc)
+	draw_stroke_rounded(label_rect, theme.border, 4 * sc, 1)
 	draw_text(
 		label_c,
 		i32(label_rect.x + (label_rect.width - label_w) * 0.5 + 4 * sc),
@@ -1016,11 +997,10 @@ plot_histogram :: proc(
 	bins_edit: ^int = nil,
 ) {
 	sc := ui_scale
-	rl.DrawRectangleRec(rect, theme.bg)
-	rl.DrawRectangleLinesEx(rect, 1, theme.border)
+	draw_fill_rounded(rect, theme.window_bg, UI_RADIUS_SM * sc)
 
 	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
-	draw_text(title_cstr, i32(rect.x + 4 * sc), i32(rect.y + 2 * sc), i32(10 * sc), theme.text)
+	draw_text(title_cstr, i32(rect.x + 8 * sc), i32(rect.y + 4 * sc), i32(11 * sc), theme.muted)
 
 	n_bins := number_bins
 	if bins_edit != nil {
@@ -1165,11 +1145,10 @@ plot_histogram_2d :: proc(
 	ui_scale: f32 = 1,
 ) {
 	sc := ui_scale
-	rl.DrawRectangleRec(rect, theme.bg)
-	rl.DrawRectangleLinesEx(rect, 1, theme.border)
+	draw_fill_rounded(rect, theme.window_bg, UI_RADIUS_SM * sc)
 
 	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
-	draw_text(title_cstr, i32(rect.x + 4 * sc), i32(rect.y + 2 * sc), i32(10 * sc), theme.text)
+	draw_text(title_cstr, i32(rect.x + 8 * sc), i32(rect.y + 4 * sc), i32(11 * sc), theme.muted)
 
 	plot_area := plot_area_of(rect, histogram2d_margins, sc)
 

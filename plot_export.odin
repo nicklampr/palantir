@@ -261,18 +261,17 @@ plot_save_button :: proc(
 		app.save_feedback_title == title &&
 		rl.GetTime() - app.save_feedback_at < PLOT_SAVE_FEEDBACK_SECS
 
-	bg := theme.border
-	if hover {
-		bg = theme.axis_x
-	}
+	bg := theme.hover if hover else theme.bg
 	text_col := theme.text
 	if just_saved {
 		label = "Saved"
 		text_col = theme.axis_y
+		bg = rl.Fade(theme.axis_y, 0.18)
 	}
 
-	rl.DrawRectangleRec(btn, bg)
-	rl.DrawRectangleLinesEx(btn, 1, theme.border)
+	radius := UI_RADIUS_SM * sc
+	draw_fill_rounded(btn, bg, radius)
+	draw_stroke_rounded(btn, theme.border, radius, 1)
 	draw_text(
 		label,
 		i32(btn.x + (bw - f32(measure_text(label, fs))) * 0.5),

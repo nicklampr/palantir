@@ -254,7 +254,7 @@ test_folder_palette_selection :: proc(t: ^testing.T) {
 	)
 
 	// Selecting the parent entry ("..") must navigate without dangling.
-	results_handle_folder_select(&app, 0)
+	results_handle_folder_select(&app, app.palette_folder_children[0].description)
 	testing.expect(t, app.results.root == "/tmp", "navigated to parent folder")
 }
 
@@ -516,6 +516,79 @@ test_folder_palette_stress :: proc(t: ^testing.T) {
 		}
 	}
 	testing.expect(t, true, "folder palette stress cycles completed without memory errors")
+}
+
+@(test)
+test_folder_palette_select_after_rescan :: proc(t: ^testing.T) {
+	// Regression: selecting a folder after folder_cmds is rebuilt must use the
+	// palette-owned description, not an index into the freed list.
+	app: App
+	results_init(&app)
+	palette_init(&app.palette, nil, nil)
+	defer {
+		results_destroy(&app)
+		palette_destroy(&app.palette)
+		for p in app.recents {delete(p)}
+		delete(app.recents)
+		for fc in app.palette_folder_children {
+			delete(fc.name)
+			delete(fc.description)
+		}
+		delete(app.palette_folder_children)
+	}
+
+	base := fmt.tprintf("/tmp/palantir_rescan_pal_%d", os.get_pid())
+	sub1 := fmt.tprintf("%s/sub1", base)
+	testing.expect(t, os.make_directory(base) == nil, "create temp dir")
+	testing.expect(t, os.make_directory(sub1) == nil, "create temp subdir")
+	defer {
+		os.remove_all(sub1)
+		os.remove_all(base)
+	}
+
+	results_set_root(&app, base)
+	open_folder_palette(&app)
+	testing.expect(t, len(app.palette_folder_children) >= 2, "folder list has parent + subdirs")
+	if len(app.palette_folder_children) < 2 {
+		return
+	}
+	path := app.palette_folder_children[1].description
+	testing.expect(t, path == sub1, "palette owns the subdirectory path")
+
+	refresh_palette_folders(&app)
+	results_handle_folder_select(&app, path)
+	testing.expect(t, app.results.root == sub1, "select after rescan navigated using palette-owned path")
+}
+
+@(test)
+test_palette_recent_folder_select :: proc(t: ^testing.T) {
+	app: App
+	results_init(&app)
+	defer {
+		results_destroy(&app)
+		for p in app.recents {delete(p)}
+		delete(app.recents)
+	}
+
+	base := fmt.tprintf("/tmp/palantir_recent_pal_%d", os.get_pid())
+	other := fmt.tprintf("/tmp/palantir_recent_pal_other_%d", os.get_pid())
+	testing.expect(t, os.make_directory(base) == nil, "create temp dir")
+	testing.expect(t, os.make_directory(other) == nil, "create other dir")
+	defer {
+		os.remove_all(base)
+		os.remove_all(other)
+	}
+
+	results_set_root(&app, base)
+	results_set_root(&app, other)
+	testing.expect(t, len(app.recents) >= 1, "recents recorded")
+	if len(app.recents) == 0 {
+		return
+	}
+	path := app.recents[0]
+	results_open_folder(&app, path)
+	testing.expect(t, app.results.root == path, "recent folder path select navigated")
+	testing.expect(t, app.results.show_recents == false, "recents panel closed after select")
 }
 
 // --- tiny test helpers ------------------------------------------------------

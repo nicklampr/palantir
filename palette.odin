@@ -147,6 +147,9 @@ palette_open_it :: proc(p: ^Command_Palette) {
 
 palette_close :: proc(p: ^Command_Palette) {
 	p.open = false
+	clear(&p.layer_stack)
+	p.commands = p.root_commands
+	palette_reset(p)
 }
 
 palette_toggle :: proc(p: ^Command_Palette) {
@@ -318,60 +321,62 @@ palette_draw :: proc(p: ^Command_Palette, screen_w, screen_h: f32) {
 	panel_y := screen_h * s.top_ratio
 
 	panel := rl.Rectangle{panel_x, panel_y, panel_w, panel_h}
-	rl.DrawRectangleRec(panel, s.panel)
-	rl.DrawRectangleLinesEx(panel, 2, s.border)
+	radius := UI_RADIUS * sc
+	draw_shadow(panel, sc, radius)
+	draw_fill_rounded(panel, s.panel, radius)
+	draw_stroke_rounded(panel, s.border, radius, 1)
 
-	input := fmt.ctprintf("> %s", palette_query_string(p))
-	draw_text(input, c.int(panel_x + 18 * sc), c.int(panel_y + 14 * sc), s.font_size, s.text)
-	rl.DrawLine(
-		c.int(panel_x + 16 * sc),
-		c.int(panel_y + 48 * sc),
-		c.int(panel_x + panel_w - 16 * sc),
-		c.int(panel_y + 48 * sc),
-		s.border,
-	)
+	query_rect := rl.Rectangle{panel_x + 14 * sc, panel_y + 12 * sc, panel_w - 28 * sc, 36 * sc}
+	draw_fill_rounded(query_rect, rl.Fade(s.border, 0.18), UI_RADIUS_SM * sc)
+	input := fmt.ctprintf("%s", palette_query_string(p))
+	if p.query_len == 0 {
+		draw_text("Type to filter…", c.int(query_rect.x + 12 * sc), c.int(query_rect.y + 8 * sc), s.font_size - 6, s.hint)
+	} else {
+		draw_text(input, c.int(query_rect.x + 12 * sc), c.int(query_rect.y + 8 * sc), s.font_size - 6, s.text)
+	}
 
-	list_y := int(panel_y + 64 * sc)
+	list_y := int(panel_y + 58 * sc)
 	visible := min(s.max_rows, len(p.matches))
+	row_h := max(s.row_height, i32(36 * sc))
 
 	for i in 0 ..< visible {
 		cmd := p.commands[p.matches[i]]
-		row_y := list_y + i * int(s.row_height)
-
+		row := rl.Rectangle{panel_x + 10 * sc, f32(list_y) + f32(i) * f32(row_h), panel_w - 20 * sc, f32(row_h) - 4 * sc}
 		if i == p.selected {
-			rl.DrawRectangle(
-				c.int(panel_x + 10 * sc),
-				c.int(f32(row_y) - 4 * sc),
-				c.int(panel_w - 20 * sc),
-				s.row_height,
-				s.selection,
-			)
+			draw_fill_rounded(row, s.selection, UI_RADIUS_SM * sc)
 		}
 
-		suffix := " >" if len(cmd.children) > 0 else ""
-		label := fmt.ctprintf("%s%s - %s", cmd.name, suffix, cmd.description)
-		draw_text(label, c.int(panel_x + 20 * sc), c.int(row_y), s.font_size - 4, s.text)
+		name_fs := s.font_size - 8
+		desc_fs := i32(12 * sc)
+		suffix := "  ›" if len(cmd.children) > 0 else ""
+		name_c := fmt.ctprintf("%s%s", cmd.name, suffix)
+		draw_text(name_c, c.int(row.x + 12 * sc), c.int(row.y + 4 * sc), name_fs, s.text)
+		if len(cmd.description) > 0 {
+			desc_c := fmt.ctprintf("%s", cmd.description)
+			draw_text(desc_c, c.int(row.x + 12 * sc), c.int(row.y + 4 * sc + f32(name_fs)), desc_fs, s.hint)
+		}
 	}
 
 	if len(p.matches) == 0 {
 		draw_text(
-			"No command found",
-			c.int(panel_x + 20 * sc),
-			c.int(list_y),
-			s.font_size - 4,
+			"No matches",
+			c.int(panel_x + 22 * sc),
+			c.int(list_y + 8),
+			s.font_size - 8,
 			s.empty,
 		)
 	}
 
-	esc_hint := "Esc to close"
+	esc_hint := "Esc close"
 	if len(p.layer_stack) > 0 {
-		esc_hint = "Esc to go back"
+		esc_hint = "Esc back"
 	}
+	hint_y := panel_y + panel_h - 26 * sc
 	draw_text(
-		fmt.ctprintf("Enter to run, %s", esc_hint),
+		fmt.ctprintf("Enter  ·  %s  ·  Tab complete", esc_hint),
 		c.int(panel_x + 18 * sc),
-		c.int(panel_y + panel_h - 30 * sc),
-		i32(16 * sc),
+		c.int(hint_y),
+		i32(12 * sc),
 		s.hint,
 	)
 }

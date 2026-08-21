@@ -443,19 +443,21 @@ draw_legend :: proc(
 
 	bx := plot.x + 8 * sc
 	by := plot.y + 8 * sc
-	rl.DrawRectangle(i32(bx), i32(by), i32(box_w), i32(box_h), rl.Color{40, 40, 50, 200})
-	rl.DrawRectangleLinesEx({bx, by, box_w, box_h}, 1, theme.border)
+	box := rl.Rectangle{bx, by, box_w, box_h}
+	draw_fill_rounded(box, rl.Fade(theme.bg, 0.92), UI_RADIUS_SM * sc)
+	draw_stroke_rounded(box, theme.border, UI_RADIUS_SM * sc, 1)
 
-	for r, i in routes {
+	for _, i in routes {
 		y := by + pad + f32(i) * row_h
-		rl.DrawRectangle(i32(bx + pad), i32(y), i32(12 * sc), i32(12 * sc), routes[i].color)
+		swatch := rl.Rectangle{bx + pad, y, 12 * sc, 12 * sc}
+		draw_fill_rounded(swatch, routes[i].color, 3)
 		rl.DrawTextEx(
 			app_font,
 			names[i],
 			rl.Vector2{bx + pad + 18 * sc, y},
 			fs,
 			1,
-			rl.WHITE,
+			theme.text,
 		)
 	}
 }
@@ -467,7 +469,7 @@ draw_map_hint :: proc(plot: rl.Rectangle, theme: Theme, font_size: i32, sc: f32)
 		i32(plot.x + 8 * sc),
 		i32(plot.y + plot.height - 20 * sc),
 		font_size - 2,
-		rl.Fade(theme.text, 0.5),
+		theme.muted,
 	)
 }
 
@@ -486,11 +488,10 @@ plot_earth_map :: proc(
 	input_enabled: bool = true,
 ) {
 	sc := ui_scale
-	rl.DrawRectangleRec(rect, theme.bg)
-	rl.DrawRectangleLinesEx(rect, 1, theme.border)
+	draw_fill_rounded(rect, theme.window_bg, UI_RADIUS_SM * sc)
 
 	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
-	draw_text(title_cstr, i32(rect.x + 4 * sc), i32(rect.y + 2 * sc), i32(10 * sc), theme.text)
+	draw_text(title_cstr, i32(rect.x + 8 * sc), i32(rect.y + 4 * sc), i32(11 * sc), theme.muted)
 
 	plot_area := plot_area_of(rect, earthmap_margins, sc)
 

@@ -73,10 +73,13 @@ Scroll_State :: struct {
 	grab_off: f32, // mouse.y - thumb.y when the drag started
 }
 
-SCROLLBAR_GUTTER :: 14 // ui-scale units
-SCROLLBAR_PAD :: 12 // ui-scale units
-SCROLLBAR_MIN_THUMB :: 20
+SCROLLBAR_GUTTER :: 8 // ui-scale units
+SCROLLBAR_PAD :: 10 // ui-scale units
+SCROLLBAR_MIN_THUMB :: 24
 WHEEL_STEP :: 48 // ui-scale units per wheel notch
+UI_RADIUS :: 8
+UI_RADIUS_SM :: 6
+UI_SEGMENTS :: 8
 
 // Right-edge track the scrollbar lives in, inset by SCROLLBAR_PAD.
 scroll_track :: proc(viewport: rl.Rectangle, sc: f32) -> rl.Rectangle {
@@ -183,10 +186,7 @@ ui_scroll_end :: proc(u: ^Ui, s: ^Scroll_State, viewport: rl.Rectangle, theme: T
 	if !visible {
 		return
 	}
-	rl.DrawRectangleRec(track, theme.bg)
-	rl.DrawRectangleLinesEx(track, 1, theme.border)
-	rl.DrawRectangleRec(thumb, theme.axis_x)
-	rl.DrawRectangleLinesEx(thumb, 1, theme.border)
+	draw_scrollbar(track, thumb, theme, sc)
 }
 
 PLOT_BLUE :: rl.Color{31, 119, 180, 255}
@@ -199,63 +199,131 @@ PLOT_BROWN :: rl.Color{140, 86, 75, 255}
 PLOT_COLORS := [?]rl.Color{PLOT_BLUE, PLOT_ORANGE, PLOT_GREEN, PLOT_RED, PLOT_PURPLE, PLOT_BROWN}
 
 Theme :: struct {
-	bg:        rl.Color,
-	border:    rl.Color,
-	text:      rl.Color,
-	grid:      rl.Color,
-	window_bg: rl.Color,
-	axis_x:    rl.Color,
-	axis_y:    rl.Color,
-	axis_z:    rl.Color,
+	bg:          rl.Color, // card / control fill
+	border:      rl.Color,
+	text:        rl.Color,
+	muted:       rl.Color, // secondary labels
+	hover:       rl.Color, // row / button hover fill
+	accent:      rl.Color, // focus, selection, primary actions
+	accent_text: rl.Color, // text drawn on accent fills
+	grid:        rl.Color,
+	window_bg:   rl.Color, // app background
+	axis_x:      rl.Color,
+	axis_y:      rl.Color,
+	axis_z:      rl.Color,
 }
 
 // 0 = Rosepine Dawn, 1 = Catppuccino Mocha, 2 = Vesper.
 // Copied into `App.themes` at init so the app owns its palette of themes.
 BASE_THEMES := [?]Theme {
 	Theme { 	// Rosepine Dawn (default)
-		bg        = rl.Color{0xfa, 0xf4, 0xed, 0xff},
-		border    = rl.Color{0xce, 0xca, 0xcd, 0xff},
-		text      = rl.Color{0x2a, 0x25, 0x40, 0xff},
-		grid      = rl.Color{0xf2, 0xe9, 0xde, 0xff},
-		window_bg = rl.Color{0xff, 0xfa, 0xf3, 0xff},
-		axis_x    = rl.Color{0x28, 0x69, 0x83, 0xff},
-		axis_y    = rl.Color{0x56, 0x94, 0x9f, 0xff},
-		axis_z    = rl.Color{0xea, 0x9d, 0x34, 0xff},
+		bg          = rl.Color{0xff, 0xfa, 0xf3, 0xff},
+		border      = rl.Color{0xdf, 0xda, 0xd9, 0xff},
+		text        = rl.Color{0x57, 0x52, 0x79, 0xff},
+		muted       = rl.Color{0x79, 0x75, 0x93, 0xff},
+		hover       = rl.Color{0xf2, 0xe9, 0xe1, 0xff},
+		accent      = rl.Color{0x28, 0x69, 0x83, 0xff},
+		accent_text = rl.Color{0xff, 0xfa, 0xf3, 0xff},
+		grid        = rl.Color{0xf2, 0xe9, 0xde, 0xff},
+		window_bg   = rl.Color{0xfa, 0xf4, 0xed, 0xff},
+		axis_x      = rl.Color{0x28, 0x69, 0x83, 0xff},
+		axis_y      = rl.Color{0x56, 0x94, 0x9f, 0xff},
+		axis_z      = rl.Color{0xea, 0x9d, 0x34, 0xff},
 	},
 	Theme { 	// Catppuccino Mocha
-		bg        = rl.Color{0x1e, 0x1e, 0x2e, 0xff},
-		border    = rl.Color{0x58, 0x5b, 0x70, 0xff},
-		text      = rl.Color{0xcd, 0xd6, 0xf4, 0xff},
-		grid      = rl.Color{0x31, 0x32, 0x44, 0xff},
-		window_bg = rl.Color{0x18, 0x18, 0x2b, 0xff},
-		axis_x    = rl.Color{0x89, 0xb4, 0xfa, 0xff},
-		axis_y    = rl.Color{0xa6, 0xe3, 0xa1, 0xff},
-		axis_z    = rl.Color{0xf9, 0xe2, 0xaf, 0xff},
+		bg          = rl.Color{0x1e, 0x1e, 0x2e, 0xff},
+		border      = rl.Color{0x45, 0x47, 0x5a, 0xff},
+		text        = rl.Color{0xcd, 0xd6, 0xf4, 0xff},
+		muted       = rl.Color{0xa6, 0xad, 0xc8, 0xff},
+		hover       = rl.Color{0x31, 0x32, 0x44, 0xff},
+		accent      = rl.Color{0x89, 0xb4, 0xfa, 0xff},
+		accent_text = rl.Color{0x1e, 0x1e, 0x2e, 0xff},
+		grid        = rl.Color{0x31, 0x32, 0x44, 0xff},
+		window_bg   = rl.Color{0x18, 0x18, 0x25, 0xff},
+		axis_x      = rl.Color{0x89, 0xb4, 0xfa, 0xff},
+		axis_y      = rl.Color{0xa6, 0xe3, 0xa1, 0xff},
+		axis_z      = rl.Color{0xf9, 0xe2, 0xaf, 0xff},
 	},
 	Theme { 	// Vesper
-		bg        = rl.Color{0x10, 0x10, 0x10, 0xff},
-		border    = rl.Color{0x33, 0x33, 0x33, 0xff},
-		text      = rl.Color{0xed, 0xed, 0xed, 0xff},
-		grid      = rl.Color{0x1c, 0x1c, 0x1c, 0xff},
-		window_bg = rl.Color{0x16, 0x16, 0x16, 0xff},
-		axis_x    = rl.Color{0x99, 0xff, 0xe4, 0xff},
-		axis_y    = rl.Color{0xff, 0xc7, 0x99, 0xff},
-		axis_z    = rl.Color{0xff, 0xff, 0xff, 0xff},
+		bg          = rl.Color{0x16, 0x16, 0x16, 0xff},
+		border      = rl.Color{0x2a, 0x2a, 0x2a, 0xff},
+		text        = rl.Color{0xed, 0xed, 0xed, 0xff},
+		muted       = rl.Color{0x8b, 0x8b, 0x8b, 0xff},
+		hover       = rl.Color{0x1c, 0x1c, 0x1c, 0xff},
+		accent      = rl.Color{0x99, 0xff, 0xe4, 0xff},
+		accent_text = rl.Color{0x10, 0x10, 0x10, 0xff},
+		grid        = rl.Color{0x1c, 0x1c, 0x1c, 0xff},
+		window_bg   = rl.Color{0x10, 0x10, 0x10, 0xff},
+		axis_x      = rl.Color{0x99, 0xff, 0xe4, 0xff},
+		axis_y      = rl.Color{0xff, 0xc7, 0x99, 0xff},
+		axis_z      = rl.Color{0xff, 0xff, 0xff, 0xff},
 	},
 }
 
 palette_style_for_theme :: proc(t: Theme, ui_scale: f32 = 1.0) -> Palette_Style {
 	s := palette_default_style()
-	s.backdrop = rl.Fade(t.bg, 0.6)
-	s.panel = t.window_bg
+	s.backdrop = rl.Color{0, 0, 0, 130}
+	s.panel = t.bg
 	s.border = t.border
 	s.text = t.text
-	s.hint = rl.Fade(t.text, 0.5)
-	s.empty = rl.Fade(t.axis_z, 0.85)
-	s.selection = rl.Fade(t.axis_x, 0.3)
+	s.hint = t.muted
+	s.empty = t.muted
+	s.selection = rl.Fade(t.accent, 0.22)
 	s.max_width *= ui_scale
-	s.max_height *= ui_scale
+	s.max_height = 420 * ui_scale
 	s.font_size = i32(f32(s.font_size) * ui_scale)
-	s.row_height = i32(f32(s.row_height) * ui_scale)
+	s.row_height = i32(40 * ui_scale)
+	s.max_rows = 7
 	return s
+}
+
+ui_roundness :: proc(rect: rl.Rectangle, radius_px: f32) -> f32 {
+	m := min(rect.width, rect.height)
+	if m <= 0 {
+		return 0
+	}
+	return clamp((radius_px * 2) / m, 0, 1)
+}
+
+draw_fill_rounded :: proc(rect: rl.Rectangle, color: rl.Color, radius_px: f32) {
+	r := ui_roundness(rect, radius_px)
+	if r <= 0.01 {
+		rl.DrawRectangleRec(rect, color)
+		return
+	}
+	rl.DrawRectangleRounded(rect, r, UI_SEGMENTS, color)
+}
+
+draw_stroke_rounded :: proc(rect: rl.Rectangle, color: rl.Color, radius_px: f32, thick: f32 = 1) {
+	r := ui_roundness(rect, radius_px)
+	if r <= 0.01 {
+		rl.DrawRectangleLinesEx(rect, thick, color)
+		return
+	}
+	rl.DrawRectangleRoundedLinesEx(rect, r, UI_SEGMENTS, thick, color)
+}
+
+draw_shadow :: proc(rect: rl.Rectangle, sc: f32, radius_px: f32) {
+	offsets := [?]f32{1, 2, 4}
+	alphas := [?]u8{10, 8, 6}
+	for i in 0 ..< len(offsets) {
+		o := offsets[i] * sc
+		r := rl.Rectangle{rect.x, rect.y + o * 0.6, rect.width, rect.height + o * 0.4}
+		draw_fill_rounded(r, rl.Color{0, 0, 0, alphas[i]}, radius_px)
+	}
+}
+
+draw_panel :: proc(rect: rl.Rectangle, theme: Theme, sc: f32, shadow := false) {
+	radius := UI_RADIUS * sc
+	if shadow {
+		draw_shadow(rect, sc, radius)
+	}
+	draw_fill_rounded(rect, theme.bg, radius)
+	draw_stroke_rounded(rect, theme.border, radius, 1)
+}
+
+draw_scrollbar :: proc(track, thumb: rl.Rectangle, theme: Theme, sc: f32) {
+	radius := min(track.width, track.height) * 0.5
+	draw_fill_rounded(track, rl.Fade(theme.border, 0.35), radius)
+	draw_fill_rounded(thumb, theme.muted, radius)
 }
