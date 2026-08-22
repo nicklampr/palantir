@@ -76,6 +76,8 @@ Results_State :: struct {
 	// Command-palette folder navigation: parent + subdirectories of `root`,
 	// rebuilt whenever the folder is rescanned. Owns the name/path strings.
 	folder_cmds:   [dynamic]Palette_Command,
+	show_left_panel: bool,
+	show_bottom_panel: bool,
 	show_recents:  bool,
 	search_buf:    [256]u8,
 	search_len:    int,
@@ -105,6 +107,8 @@ results_init :: proc(app: ^App) {
 		lon_col = -1,
 	}
 	rs.map_view = Map_View{center_lon = 0, center_lat = 25, lon_span = 360}
+	rs.show_left_panel = true
+	rs.show_bottom_panel = true
 }
 
 results_destroy :: proc(app: ^App) {
@@ -639,6 +643,14 @@ open_recents_view :: proc(app: ^App) {
 	app.results.show_recents = true
 }
 
+results_toggle_left_panel :: proc(app: ^App) {
+	app.results.show_left_panel = !app.results.show_left_panel
+}
+
+results_toggle_bottom_panel :: proc(app: ^App) {
+	app.results.show_bottom_panel = !app.results.show_bottom_panel
+}
+
 // Focuses the file-browser search box (Ctrl+F / "Find files").
 results_focus_search :: proc(app: ^App) {
 	rs := &app.results
@@ -685,8 +697,9 @@ results_refresh :: proc(app: ^App) {
 }
 
 // Global keyboard shortcuts for the results explorer (ignored while the
-// command palette is open). Ctrl+F focuses search, Ctrl+R refreshes, and
-// Ctrl+1..4 switch the active plot type.
+// command palette is open). Ctrl+F focuses search, Ctrl+R refreshes,
+// Ctrl+L/Ctrl+B toggle the left/bottom panels, and Ctrl+1..5 switch
+// the active plot type.
 results_handle_shortcuts :: proc(app: ^App) {
 	if app.palette.open {
 		return
@@ -698,6 +711,12 @@ results_handle_shortcuts :: proc(app: ^App) {
 		}
 		if rl.IsKeyPressed(.R) {
 			results_refresh(app)
+		}
+		if rl.IsKeyPressed(.L) {
+			results_toggle_left_panel(app)
+		}
+		if rl.IsKeyPressed(.B) {
+			results_toggle_bottom_panel(app)
 		}
 		// Ctrl+G opens the folder-selection palette for the current root.
 		if rl.IsKeyPressed(.G) {
@@ -797,7 +816,11 @@ draw_results_view :: proc(app: ^App) {
 	btn_w := 88 * sc
 	gap := 8 * sc
 	refresh_rect := rl.Rectangle{sw - pad - btn_w, top, btn_w, bar_h}
-	recents_rect := rl.Rectangle{refresh_rect.x - gap - btn_w, top, btn_w, bar_h}
+	bottom_toggle_w := 96 * sc
+	left_toggle_w := 82 * sc
+	bottom_toggle_rect := rl.Rectangle{refresh_rect.x - gap - bottom_toggle_w, top, bottom_toggle_w, bar_h}
+	left_toggle_rect := rl.Rectangle{bottom_toggle_rect.x - gap - left_toggle_w, top, left_toggle_w, bar_h}
+	recents_rect := rl.Rectangle{left_toggle_rect.x - gap - btn_w, top, btn_w, bar_h}
 	up_rect := rl.Rectangle{recents_rect.x - gap - 56 * sc, top, 56 * sc, bar_h}
 	path_rect := rl.Rectangle{pad, top, up_rect.x - pad - gap, bar_h}
 
@@ -827,6 +850,12 @@ draw_results_view :: proc(app: ^App) {
 	if draw_button(recents_rect, "Recents", t, sc) {
 		rs.show_recents = true
 	}
+	if draw_button(left_toggle_rect, "Left On" if rs.show_left_panel else "Left Off", t, sc) {
+		results_toggle_left_panel(app)
+	}
+	if draw_button(bottom_toggle_rect, "Bottom On" if rs.show_bottom_panel else "Bottom Off", t, sc) {
+		results_toggle_bottom_panel(app)
+	}
 	if draw_button(refresh_rect, "Refresh", t, sc) {
 		results_refresh(app)
 	}
@@ -842,29 +871,36 @@ draw_results_view :: proc(app: ^App) {
 	msg_gap := f32(18 * sc) if rs.msg != "" else 0
 	bottom_h := clamp(sh * 0.14, 160 * sc, 220 * sc)
 	body_top := top + bar_h + pad + msg_gap
-	body_bottom := sh - bottom_h - pad
+	body_bottom := sh - bottom_h - pad if rs.show_bottom_panel else sh - pad
 	left_w := 320 * sc
 	left := rl.Rectangle{pad, body_top, left_w, body_bottom - body_top}
-	right := rl.Rectangle {
-		left.x + left.width + pad,
-		body_top,
-		sw - (left.x + left.width + pad) - pad,
-		body_bottom - body_top,
+	right := rl.Rectangle{pad, body_top, sw - 2 * pad, body_bottom - body_top}
+	if rs.show_left_panel {
+		right = rl.Rectangle {
+			left.x + left.width + pad,
+			body_top,
+			sw - (left.x + left.width + pad) - pad,
+			body_bottom - body_top,
+		}
 	}
 	raw := rl.Rectangle{pad, body_bottom + pad, sw - 2 * pad, sh - body_bottom - 2 * pad}
 
 	// --- left panel ----------------------------------------------------------
-	if rs.show_recents {
-		draw_recents_panel(app, left)
-	} else {
-		draw_file_browser(app, left)
+	if rs.show_left_panel {
+		if rs.show_recents {
+			draw_recents_panel(app, left)
+		} else {
+			draw_file_browser(app, left)
+		}
 	}
 
 	// --- right panel: plot ---------------------------------------------------
 	draw_plot_panel(app, right)
 
 	// --- bottom panel: raw data ---------------------------------------------
-	draw_raw_table(app, raw)
+	if rs.show_bottom_panel {
+		draw_raw_table(app, raw)
+	}
 }
 
 // Indices (into rs.entries) that match the current search query. An empty

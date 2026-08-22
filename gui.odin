@@ -145,6 +145,8 @@ GuiCommand :: enum {
 	open_recents,
 	find_files,
 	refresh_plots,
+	toggle_left_panel,
+	toggle_bottom_panel,
 	quit,
 }
 
@@ -194,6 +196,16 @@ gui_commands := [?]Palette_Command {
 		name = "Refresh plots",
 		description = "reload selected result files",
 		user_data = rawptr(uintptr(GuiCommand.refresh_plots)),
+	},
+	{
+		name = "Toggle left panel",
+		description = "show/hide the files/recents panel",
+		user_data = rawptr(uintptr(GuiCommand.toggle_left_panel)),
+	},
+	{
+		name = "Toggle bottom panel",
+		description = "show/hide the raw data table",
+		user_data = rawptr(uintptr(GuiCommand.toggle_bottom_panel)),
 	},
 	{
 		name = "Recent folders",
@@ -417,6 +429,10 @@ on_palette_select :: proc(cmd: Palette_Command) {
 		results_focus_search(&default_app)
 	case .refresh_plots:
 		results_refresh(&default_app)
+	case .toggle_left_panel:
+		results_toggle_left_panel(&default_app)
+	case .toggle_bottom_panel:
+		results_toggle_bottom_panel(&default_app)
 	case .goto_folder:
 		// Keep the palette open while transitioning into the folder list.
 		default_app.palette.stay_open = true
@@ -1359,4 +1375,3 @@ color_lerp :: proc(a, b: rl.Color, t: f32) -> rl.Color {
 		u8(f32(a.a) + (f32(b.a) - f32(a.a)) * u),
 	}
 }
-
