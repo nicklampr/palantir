@@ -949,6 +949,7 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 	// input, the search box, an open dropdown, or an Enter a text box just
 	// consumed this frame).
 	if !app.palette.open && !app.palette_just_closed && !rs.path_edit && !rs.search_edit && !rs.text_enter && !results_any_dropdown_open(rs) {
+		root_changed := false
 		if total_rows > 0 && rl.IsKeyPressed(.DOWN) {
 			rs.file_cursor = min(rs.file_cursor + 1, total_rows - 1)
 		}
@@ -956,23 +957,41 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 			rs.file_cursor = max(rs.file_cursor - 1, 0)
 		}
 		if rl.IsKeyPressed(.LEFT) {
+			prev_root := rs.root
 			results_go_up(app)
+			root_changed = root_changed || rs.root != prev_root
 		}
 		if rl.IsKeyPressed(.BACKSPACE) {
+			prev_root := rs.root
 			results_go_up(app)
+			root_changed = root_changed || rs.root != prev_root
 		}
 		if rl.IsKeyPressed(.RIGHT) || rl.IsKeyPressed(.ENTER) {
 			if rs.file_cursor == 0 && has_parent {
+				prev_root := rs.root
 				results_go_up(app)
+				root_changed = root_changed || rs.root != prev_root
 			} else {
 				entry_idx := results_entry_at_cursor(app, filtered, has_parent)
 				if entry_idx >= 0 && entry_idx < len(rs.entries) {
 					if rs.entries[entry_idx].is_dir {
+						prev_root := rs.root
 						results_set_root(app, rs.entries[entry_idx].path)
+						root_changed = root_changed || rs.root != prev_root
 					} else {
 						results_select_only(app, entry_idx)
 					}
 				}
+			}
+		}
+		if root_changed {
+			// Keyboard navigation can change folders; rebuild derived row state so
+			// we never render using stale indices from the previous listing.
+			filtered = results_filtered_entries(app)
+			has_parent = len(rs.root) > 0 && filepath.dir(rs.root) != rs.root
+			total_rows = len(filtered) + 1 if has_parent else len(filtered)
+			if total_rows > 0 {
+				rs.file_cursor = clamp(rs.file_cursor, 0, total_rows - 1)
 			}
 		}
 		// Keep the cursor row visible.
