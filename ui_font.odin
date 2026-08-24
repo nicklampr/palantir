@@ -35,6 +35,7 @@ load_app_font :: proc() {
 			for i in 0 ..< GLYPH_COUNT {
 				codepoints[i] = rune(32 + i)
 			}
+			glyph_count: c.int
 			glyphs := rl.LoadFontData(
 				data,
 				data_size,
@@ -42,20 +43,21 @@ load_app_font :: proc() {
 				&codepoints[0],
 				GLYPH_COUNT,
 				.DEFAULT,
+				&glyph_count,
 			)
-			if glyphs != nil {
+			if glyphs != nil && glyph_count > 0 {
 				recs: [^]rl.Rectangle
-				atlas := rl.GenImageFontAtlas(glyphs, &recs, GLYPH_COUNT, APP_FONT_BASE_SIZE, 4, 1)
+				atlas := rl.GenImageFontAtlas(glyphs, &recs, glyph_count, APP_FONT_BASE_SIZE, 4, 1)
 				if atlas.data != nil {
 					font := rl.Font {
 						baseSize     = APP_FONT_BASE_SIZE,
-						glyphCount   = GLYPH_COUNT,
+						glyphCount   = glyph_count,
 						glyphPadding = 4,
 						texture      = rl.LoadTextureFromImage(atlas),
 						recs         = recs,
 						glyphs       = glyphs,
 					}
-					for i in 0 ..< GLYPH_COUNT {
+					for i in 0 ..< glyph_count {
 						rl.UnloadImage(glyphs[i].image)
 						glyphs[i].image = rl.ImageFromImage(atlas, recs[i])
 					}
@@ -67,7 +69,7 @@ load_app_font :: proc() {
 						rl.UnloadFont(font)
 					}
 				} else {
-					rl.UnloadFontData(glyphs, GLYPH_COUNT)
+					rl.UnloadFontData(glyphs, glyph_count)
 				}
 			}
 			rl.UnloadFileData(data)
