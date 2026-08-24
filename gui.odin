@@ -25,27 +25,27 @@ import "core:strings"
 import rl "vendor:raylib"
 
 App :: struct {
-	running:        bool,
-	themes:         [len(BASE_THEMES)]Theme,
-	theme_index:    int,
-	ui_scale_zoom:  f32, // user-adjustable multiplier on the detected UI scale
-	ui_scale:       f32, // clamped base scale * zoom, used for all UI metrics
-	palette:        Command_Palette,
+	running:                 bool,
+	themes:                  [len(BASE_THEMES)]Theme,
+	theme_index:             int,
+	ui_scale_zoom:           f32, // user-adjustable multiplier on the detected UI scale
+	ui_scale:                f32, // clamped base scale * zoom, used for all UI metrics
+	palette:                 Command_Palette,
 	// True for one frame after the palette consumes input and closes, so the
 	// file browser cannot also react to the same keypress (e.g. the Enter that
 	// navigated a Ctrl+G folder selection would otherwise re-fire on the fresh
 	// listing's ".." row and bounce straight back to the parent folder).
-	palette_just_closed: bool,
+	palette_just_closed:     bool,
 	// Results explorer state (see results_view.odin).
-	results:        Results_State,
+	results:                 Results_State,
 	// Plot PNG export feedback (see plot_export.odin).
-	export_count:        int,
-	exporting:           bool,
-	save_feedback_at:    f64,
-	save_feedback_title: string,
+	export_count:            int,
+	exporting:               bool,
+	save_feedback_at:        f64,
+	save_feedback_title:     string,
 	// Recently opened files, persisted in the settings file.
-	recents:             []string,
-	recents_dirty:       bool,
+	recents:                 []string,
+	recents_dirty:           bool,
 	// Dynamic palette command root so the "Open recents" submenu can be
 	// rebuilt at runtime (see refresh_palette_recents).
 	palette_root:            [dynamic]Palette_Command,
@@ -70,16 +70,16 @@ default_config :: proc() -> App_Config {
 
 // Persisted between runs in SETTINGS_PATH (native builds only).
 App_Settings :: struct {
-	theme_index:   int,
-	window_width:  i32,
-	window_height: i32,
+	theme_index:    int,
+	window_width:   i32,
+	window_height:  i32,
 	// Multiplier on the auto-detected UI scale; adjustable live with +/-/0.
-	ui_scale_zoom: f32,
+	ui_scale_zoom:  f32,
 	// Recently browsed folders (most recent first).
 	recent_folders: []string,
 }
 
-SETTINGS_PATH :: "yggdrasil_gui.json"
+SETTINGS_PATH :: "palantir_gui.json"
 
 default_settings :: proc() -> App_Settings {
 	cfg := default_config()
@@ -112,10 +112,10 @@ save_settings :: proc(app: ^App) {
 		dpi := rl.GetWindowScaleDPI()
 		scl := max(dpi.x, dpi.y, 1)
 		s := App_Settings {
-			theme_index   = app.theme_index,
-			window_width  = i32(math.round(f32(rl.GetScreenWidth()) / scl)),
-			window_height = i32(math.round(f32(rl.GetScreenHeight()) / scl)),
-			ui_scale_zoom = app.ui_scale_zoom,
+			theme_index    = app.theme_index,
+			window_width   = i32(math.round(f32(rl.GetScreenWidth()) / scl)),
+			window_height  = i32(math.round(f32(rl.GetScreenHeight()) / scl)),
+			ui_scale_zoom  = app.ui_scale_zoom,
 			recent_folders = app.recents,
 		}
 		if data, err := json.marshal(s); err == nil {
@@ -208,12 +208,12 @@ gui_commands := [?]Palette_Command {
 		user_data = rawptr(uintptr(GuiCommand.toggle_bottom_panel)),
 	},
 	{
-		name = "Recent folders",
+		name        = "Recent folders",
 		description = "recently browsed folders",
-		user_data = rawptr(uintptr(GuiCommand.recent_files)),
+		user_data   = rawptr(uintptr(GuiCommand.recent_files)),
 		// Children are replaced dynamically with the current recent-folder list by
 		// `refresh_palette_recents`.
-		children = nil,
+		children    = nil,
 	},
 	{
 		name = "Go to folder",
@@ -573,9 +573,9 @@ draw_tooltip :: proc(
 }
 
 PlotSeries :: struct {
-	name:   string,
-	color:  rl.Color,
-	points: [][2]f64,
+	name:     string,
+	color:    rl.Color,
+	points:   [][2]f64,
 	// Optional per-point hue values (continuous colormap coloring, seaborn
 	// style); nil = solid `color`.
 	hue:      []f64,
@@ -623,7 +623,7 @@ draw_plot_colorbar :: proc(
 	sc: f32,
 ) {
 	bar_x := rect.x + rect.width - 30 * sc
-	bar := rl.Rectangle {bar_x, plot_area.y, 10 * sc, plot_area.height}
+	bar := rl.Rectangle{bar_x, plot_area.y, 10 * sc, plot_area.height}
 	for iy in 0 ..< int(bar.height) {
 		t := 1 - f32(iy) / bar.height
 		col := color_lerp(theme.axis_x, theme.axis_z, t)
@@ -660,10 +660,7 @@ draw_plot_colorbar :: proc(
 		lbl_c := strings.clone_to_cstring(label, context.temp_allocator)
 		lbl_size := i32(font_size - 2)
 		ts := rl.MeasureTextEx(app_font, lbl_c, f32(lbl_size), 1)
-		pos := rl.Vector2 {
-			bar.x - 6 * sc,
-			bar.y + bar.height * 0.5 + ts.x * 0.5,
-		}
+		pos := rl.Vector2{bar.x - 6 * sc, bar.y + bar.height * 0.5 + ts.x * 0.5}
 		rl.DrawTextPro(app_font, lbl_c, pos, {0, 0}, -90, f32(lbl_size), 1, theme.text)
 	}
 }
@@ -810,7 +807,13 @@ plot_series :: proc(
 					f32((pts[i + 1][1] - y_min) / y_range) * plot_area.height
 				col := base_color
 				if hue != nil && hue_ok && !math.is_nan(hue[i]) && !math.is_nan(hue[i + 1]) {
-					col = hue_lookup(hue_lo, hue_hi, (hue[i] + hue[i + 1]) * 0.5, theme.axis_x, theme.axis_z)
+					col = hue_lookup(
+						hue_lo,
+						hue_hi,
+						(hue[i] + hue[i + 1]) * 0.5,
+						theme.axis_x,
+						theme.axis_z,
+					)
 				}
 				rl.DrawLineEx(rl.Vector2{x1, y1}, rl.Vector2{x2, y2}, line_w, col)
 			}
@@ -884,7 +887,8 @@ plot_series :: proc(
 			}
 			lines[n] = fmt.tprintf("x=%.4f  y=%.4f", best_pt[0], best_pt[1])
 			n += 1
-			if h := series[best_idx].hue; h != nil && hue_ok && best_k >= 0 && best_k < len(h) && !math.is_nan(h[best_k]) {
+			if h := series[best_idx].hue;
+			   h != nil && hue_ok && best_k >= 0 && best_k < len(h) && !math.is_nan(h[best_k]) {
 				name := series[best_idx].hue_name if len(series[best_idx].hue_name) > 0 else "hue"
 				lines[n] = fmt.tprintf("%s=%.4g", name, h[best_k])
 				n += 1
@@ -895,7 +899,18 @@ plot_series :: proc(
 
 	// Save PNG (shared widget, see plot_export.odin).
 	if plot_save_button(app, rect, title, theme, sc) {
-		plot_export_series(app, series, title, x_label, y_label, rect, theme, font_size, sc, scatter)
+		plot_export_series(
+			app,
+			series,
+			title,
+			x_label,
+			y_label,
+			rect,
+			theme,
+			font_size,
+			sc,
+			scatter,
+		)
 	}
 }
 
@@ -1144,7 +1159,18 @@ plot_histogram :: proc(
 
 	// Save PNG (shared widget, see plot_export.odin).
 	if plot_save_button(app, rect, title, theme, sc) {
-		plot_export_histogram(app, values, title, x_label, y_label, n_bins, rect, theme, font_size, sc)
+		plot_export_histogram(
+			app,
+			values,
+			title,
+			x_label,
+			y_label,
+			n_bins,
+			rect,
+			theme,
+			font_size,
+			sc,
+		)
 	}
 }
 
@@ -1357,7 +1383,19 @@ plot_histogram_2d :: proc(
 
 	// Save PNG (shared widget, see plot_export.odin).
 	if plot_save_button(app, rect, title, theme, sc) {
-		plot_export_histogram_2d(app, points, title, x_label, y_label, number_bins_x, number_bins_y, rect, theme, font_size, sc)
+		plot_export_histogram_2d(
+			app,
+			points,
+			title,
+			x_label,
+			y_label,
+			number_bins_x,
+			number_bins_y,
+			rect,
+			theme,
+			font_size,
+			sc,
+		)
 	}
 }
 
