@@ -27,6 +27,7 @@ PLOT_LINE :: 1
 PLOT_SCATTER :: 2
 PLOT_HIST :: 3
 PLOT_HIST2D :: 4
+PLOT_MESH3D :: 5
 
 File_Entry :: struct {
 	name:   string,
@@ -40,13 +41,14 @@ Results_Plot :: struct {
 	// Column selections (index into the active dataset's columns; -1 = auto).
 	x_col:   int,
 	y_col:   int,
+	z_col:   int,
 	h_col:   int,
 	lat_col: int,
 	lon_col: int,
 	// Dropdown popup state.
-	x_open, y_open, h_open, lat_open, lon_open: bool,
+	x_open, y_open, z_open, h_open, lat_open, lon_open: bool,
 	// Per-dropdown popup scroll offset (index into the column list).
-	x_scroll, y_scroll, h_scroll, lat_scroll, lon_scroll: int,
+	x_scroll, y_scroll, z_scroll, h_scroll, lat_scroll, lon_scroll: int,
 	// Plot-selector dropdown popup state.
 	plot_open: bool,
 	bins: int, // histogram bin count (0 = auto)
@@ -90,6 +92,10 @@ Results_State :: struct {
 	map_bg:        Map_Background,
 	map_bg_init:   bool,
 	msg:           string,
+	// 3D mesh viewer state (see mesh.odin / mesh_view.odin).
+	mesh:          ^Mesh_Dataset,
+	mesh_path:     string, // path the cached mesh was loaded from
+	mesh_view:     Mesh_View,
 }
 
 // --- state lifecycle ---------------------------------------------------------
@@ -102,6 +108,7 @@ results_init :: proc(app: ^App) {
 		id = PLOT_MAP,
 		x_col = -1,
 		y_col = -1,
+		z_col = -1,
 		h_col = -1,
 		lat_col = -1,
 		lon_col = -1,
@@ -109,6 +116,7 @@ results_init :: proc(app: ^App) {
 	rs.map_view = Map_View{center_lon = 0, center_lat = 25, lon_span = 360}
 	rs.show_left_panel = true
 	rs.show_bottom_panel = true
+	rs.mesh_view = mesh_view_init()
 }
 
 results_destroy :: proc(app: ^App) {
@@ -139,6 +147,20 @@ results_destroy :: proc(app: ^App) {
 		delete(rs.msg)
 	}
 	destroy_map_background(&rs.map_bg)
+	results_destroy_mesh(app)
+}
+
+results_destroy_mesh :: proc(app: ^App) {
+	rs := &app.results
+	if rs.mesh != nil {
+		mesh_destroy(rs.mesh)
+		free(rs.mesh)
+		rs.mesh = nil
+	}
+	if rs.mesh_path != "" {
+		delete(rs.mesh_path)
+		rs.mesh_path = ""
+	}
 }
 
 // --- directory browsing ------------------------------------------------------
@@ -727,6 +749,7 @@ results_handle_shortcuts :: proc(app: ^App) {
 		if rl.IsKeyPressed(.THREE) {rs.plot.id = PLOT_SCATTER}
 		if rl.IsKeyPressed(.FOUR) {rs.plot.id = PLOT_HIST}
 		if rl.IsKeyPressed(.FIVE) {rs.plot.id = PLOT_HIST2D}
+		if rl.IsKeyPressed(.SIX) {rs.plot.id = PLOT_MESH3D}
 	}
 }
 
@@ -1222,7 +1245,7 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 
 // --- plot panel --------------------------------------------------------------
 
-PLOT_NAMES := [?]string{"Map", "Line", "Scatter", "Histogram", "2D"}
+PLOT_NAMES := [?]string{"Map", "Line", "Scatter", "Histogram", "2D", "Mesh"}
 
 draw_plot_selector :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32) {
 	rs := &app.results
@@ -1374,6 +1397,24 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 					}
 				}
 			}
+
+		case PLOT_MESH3D:
+			ds := active_dataset(rs)
+			if ds == nil {
+				draw_empty_plot(plot_rect, "Select a .json mesh file", t, sc)
+			} else {
+				mesh := results_ensure_mesh(app, ds)
+				if mesh == nil {
+					draw_empty_plot(plot_rect, "Failed to load mesh (need vertices + triangles)", t, sc)
+				} else {
+					xi, yi, zi, ci := results_mesh_field_indices(app, mesh)
+					if xi < 0 || yi < 0 || zi < 0 {
+						draw_empty_plot(plot_rect, "Pick X, Y and Z fields", t, sc)
+					} else {
+						draw_mesh_view(app, mesh, xi, yi, zi, ci, plot_rect, t, sc)
+					}
+				}
+			}
 	}
 	}
 
@@ -1433,6 +1474,9 @@ draw_plot_config :: proc(app: ^App, rect: rl.Rectangle) {
 	rs := &app.results
 
 	names := ds_column_names(active_dataset(rs))
+	if rs.plot.id == PLOT_MESH3D {
+		names = mesh_field_names(rs.mesh)
+	}
 
 	// Dropdown pairs for the active plot type. Line/Scatter additionally get a
 	// "Hue" dropdown that colors points by a third column (seaborn-style).
@@ -1445,7 +1489,57 @@ draw_plot_config :: proc(app: ^App, rect: rl.Rectangle) {
 		draw_dropdown_row(app, rect, {"Column"}, {&rs.plot.h_col}, {&rs.plot.h_open}, {&rs.plot.h_scroll}, names, t, sc)
 	case PLOT_HIST2D:
 		draw_dropdown_row(app, rect, {"X", "Y"}, {&rs.plot.x_col, &rs.plot.y_col}, {&rs.plot.x_open, &rs.plot.y_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll}, names, t, sc)
+	case PLOT_MESH3D:
+		draw_dropdown_row(app, rect, {"X", "Y", "Z", "Color"}, {&rs.plot.x_col, &rs.plot.y_col, &rs.plot.z_col, &rs.plot.h_col}, {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.z_open, &rs.plot.h_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.z_scroll, &rs.plot.h_scroll}, names, t, sc)
 	}
+}
+
+// --- 3D mesh helpers ---------------------------------------------------------
+
+// Loads (and caches) the mesh for the active dataset's path.
+results_ensure_mesh :: proc(app: ^App, ds: ^Dataset) -> ^Mesh_Dataset {
+	rs := &app.results
+	if rs.mesh != nil && rs.mesh_path == ds.path {
+		return rs.mesh
+	}
+	results_destroy_mesh(app)
+	if m, ok := load_mesh_dataset(ds.path, ds.name); ok {
+		rs.mesh = m
+		rs.mesh_path = strings.clone(ds.path)
+		rs.mesh_view.fit = true
+		return m
+	}
+	return nil
+}
+
+// Resolves a selected field index (or -1 = auto) to a mesh field index, falling
+// back to a named auto-detection.
+results_mesh_field_idx :: proc(m: ^Mesh_Dataset, sel: int, auto: string) -> int {
+	if sel >= 0 && sel < len(m.fields) {
+		return sel
+	}
+	for f, i in m.fields {
+		if equal_ci(f.name, auto) {
+			return i
+		}
+	}
+	return -1
+}
+
+// X/Y/Z/Color field indices for the mesh viewer.
+results_mesh_field_indices :: proc(app: ^App, m: ^Mesh_Dataset) -> (xi, yi, zi, ci: int) {
+	rs := &app.results
+	xi = results_mesh_field_idx(m, rs.plot.x_col, "x")
+	yi = results_mesh_field_idx(m, rs.plot.y_col, "y")
+	zi = results_mesh_field_idx(m, rs.plot.z_col, "z")
+	ci = results_mesh_field_idx(m, rs.plot.h_col, "vmag")
+	if ci < 0 {
+		ci = results_mesh_field_idx(m, rs.plot.h_col, "phi")
+	}
+	if ci == xi || ci == yi || ci == zi {
+		ci = -1
+	}
+	return
 }
 
 // Dropdown button + scrollable popup list. `scroll` is the popup's first
@@ -1653,7 +1747,7 @@ draw_dropdown :: proc(
 // guarantee only one popup is ever open, so the plot selector's dropdown never
 // overlaps the column-config popups.
 results_close_column_popups :: proc(rs: ^Results_State, keep: ^bool = nil) {
-	popups := [?]^bool {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.h_open, &rs.plot.lat_open, &rs.plot.lon_open}
+	popups := [?]^bool {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.z_open, &rs.plot.h_open, &rs.plot.lat_open, &rs.plot.lon_open}
 	for p in popups {
 		if p != keep {
 			p^ = false
@@ -1662,7 +1756,7 @@ results_close_column_popups :: proc(rs: ^Results_State, keep: ^bool = nil) {
 }
 
 results_any_dropdown_open :: proc(rs: ^Results_State) -> bool {
-	return rs.plot.x_open || rs.plot.y_open || rs.plot.h_open || rs.plot.lat_open || rs.plot.lon_open || rs.plot.plot_open
+	return rs.plot.x_open || rs.plot.y_open || rs.plot.z_open || rs.plot.h_open || rs.plot.lat_open || rs.plot.lon_open || rs.plot.plot_open
 }
 
 build_map_routes :: proc(app: ^App) -> []PlotRoute {
