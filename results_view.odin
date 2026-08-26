@@ -96,6 +96,8 @@ Results_State :: struct {
 	mesh:          ^Mesh_Dataset,
 	mesh_path:     string, // path the cached mesh was loaded from
 	mesh_view:     Mesh_View,
+	mesh_render:   Mesh_Render_Cache,
+	mesh_shader:   rl.Shader,
 }
 
 // --- state lifecycle ---------------------------------------------------------
@@ -148,6 +150,11 @@ results_destroy :: proc(app: ^App) {
 	}
 	destroy_map_background(&rs.map_bg)
 	results_destroy_mesh(app)
+	mesh_view_unload(&rs.mesh_view)
+	if rs.mesh_shader.id != 0 {
+		rl.UnloadShader(rs.mesh_shader)
+		rs.mesh_shader = {}
+	}
 }
 
 results_destroy_mesh :: proc(app: ^App) {
@@ -161,6 +168,7 @@ results_destroy_mesh :: proc(app: ^App) {
 		delete(rs.mesh_path)
 		rs.mesh_path = ""
 	}
+	mesh_render_unload(&rs.mesh_render)
 }
 
 // --- directory browsing ------------------------------------------------------

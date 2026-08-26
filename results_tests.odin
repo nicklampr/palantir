@@ -3,11 +3,17 @@ package palantir
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
+import "core:sync"
 import "core:testing"
 import "core:time"
 import rl "vendor:raylib"
 
 YGG_RESULTS_DIR :: "/home/nick/yggdrasil/results"
+
+// Serializes the tests that drive the package-global `default_app` (the palette
+// callback dispatches on it), so they never clobber each other under the
+// parallel test runner.
+global_app_test_mutex: sync.Mutex
 
 @(test)
 test_load_csv_generic :: proc(t: ^testing.T) {
@@ -397,6 +403,8 @@ test_path_backspace_boundary :: proc(t: ^testing.T) {
 test_folder_palette_real_select :: proc(t: ^testing.T) {
 	// Drive the exact GUI path: the palette's on_select is `on_palette_select`,
 	// which dispatches on the global `default_app`. Set it up and reset after.
+	sync.mutex_lock(&global_app_test_mutex)
+	defer sync.mutex_unlock(&global_app_test_mutex)
 	default_app = {}
 	defer default_app = {}
 	app := &default_app
@@ -465,6 +473,8 @@ test_folder_palette_real_select :: proc(t: ^testing.T) {
 // double-free or use-after-free in the folder-palette lifetime handling.
 @(test)
 test_folder_palette_stress :: proc(t: ^testing.T) {
+	sync.mutex_lock(&global_app_test_mutex)
+	defer sync.mutex_unlock(&global_app_test_mutex)
 	default_app = {}
 	defer default_app = {}
 	app := &default_app

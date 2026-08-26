@@ -58,6 +58,15 @@ mesh_field_names :: proc(m: ^Mesh_Dataset) -> []string {
 	return names
 }
 
+mesh_field_index :: proc(m: ^Mesh_Dataset, name: string) -> int {
+	for f, i in m.fields {
+		if equal_ci(f.name, name) {
+			return i
+		}
+	}
+	return -1
+}
+
 // Names that identify the connectivity array.
 is_triangle_key :: proc(name: string) -> bool {
 	lower := strings.to_lower(name, context.temp_allocator)
