@@ -54,8 +54,7 @@ Mesh_View :: struct {
 // GPU-batched render cache for the current mesh.
 Mesh_Render_Cache :: struct {
 	valid:    bool,
-	mesh:     rl.Mesh,     // uploaded to the GPU (vaoId/vboId set)
-	material: rl.Material, // material (unlit shader attached by the caller)
+	mesh:     rl.Mesh, // uploaded to the GPU (vaoId/vboId set)
 	// Owned CPU buffers (kept so we can free them ourselves).
 	vertices: []f32,
 	normals:  []f32,
@@ -175,19 +174,20 @@ mesh_view_fit :: proc(mv: ^Mesh_View, m: ^Mesh_Dataset, xi, yi, zi: int) {
 	mv.speed = diag * 0.5
 }
 
-// Frees the GPU model and the CPU buffers it references.
+// Frees the GPU mesh and the CPU buffers it references.
 mesh_render_unload :: proc(cache: ^Mesh_Render_Cache) {
 	if !cache.valid {
 		return
 	}
-	// Null the CPU pointers so UnloadMesh's free is a no-op; we own them.
-	cache.mesh.vertices = nil
-	cache.mesh.texcoords = nil
-	cache.mesh.normals = nil
-	cache.mesh.colors = nil
-	cache.mesh.indices = nil
-	rl.UnloadMesh(cache.mesh)
-	rl.UnloadMaterial(cache.material)
+	if cache.mesh.vaoId != 0 {
+		// Null the CPU pointers so UnloadMesh's free is a no-op; we own them.
+		cache.mesh.vertices = nil
+		cache.mesh.texcoords = nil
+		cache.mesh.normals = nil
+		cache.mesh.colors = nil
+		cache.mesh.indices = nil
+		rl.UnloadMesh(cache.mesh)
+	}
 	delete(cache.vertices)
 	delete(cache.normals)
 	delete(cache.colors)
@@ -196,7 +196,7 @@ mesh_render_unload :: proc(cache: ^Mesh_Render_Cache) {
 }
 
 // Builds the batched GPU mesh for the current field selection.
-mesh_render_build :: proc(m: ^Mesh_Dataset, xi, yi, zi, ci: int, theme: Theme, shader: rl.Shader) -> Mesh_Render_Cache {
+mesh_render_build :: proc(m: ^Mesh_Dataset, xi, yi, zi, ci: int, theme: Theme) -> Mesh_Render_Cache {
 	cache := Mesh_Render_Cache{}
 	n := m.n_vertices
 	ntri := len(m.triangles)
@@ -272,12 +272,7 @@ mesh_render_build :: proc(m: ^Mesh_Dataset, xi, yi, zi, ci: int, theme: Theme, s
 				indices       = &indices[0],
 			}
 			rl.UploadMesh(&mesh, false)
-			mat := rl.LoadMaterialDefault()
-			if shader.id != 0 {
-				mat.shader = shader
-			}
 			cache.mesh = mesh
-			cache.material = mat
 			cache.indices = indices
 		}
 	}
@@ -321,7 +316,7 @@ draw_mesh_view :: proc(
 		if cache.valid {
 			mesh_render_unload(cache)
 		}
-		cache^ = mesh_render_build(m, xi, yi, zi, ci, theme, rs.mesh_shader)
+		cache^ = mesh_render_build(m, xi, yi, zi, ci, theme)
 		cache.src = m
 		cache.xi = xi
 		cache.yi = yi
@@ -360,15 +355,18 @@ draw_mesh_view :: proc(
 	rl.DrawGrid(20, 1.0)
 
 	// Thin sheets (e.g. the wake) must be visible from both sides, so draw the
-	// mesh with backface culling disabled.
+	// mesh with backface culling disabled. The material is built on the fly from
+	// the shared unlit shader and never unloaded, so it never frees the shader.
+	mat := rl.LoadMaterialDefault()
+	mat.shader = rs.mesh_shader
 	rlgl.DisableBackfaceCulling()
-	if cache.valid {
+	if cache.mesh.vaoId != 0 {
 		if mv.wireframe {
 			rlgl.EnableWireMode()
-			rl.DrawMesh(cache.mesh, cache.material, rl.Matrix(1))
+			rl.DrawMesh(cache.mesh, mat, rl.Matrix(1))
 			rlgl.DisableWireMode()
 		} else {
-			rl.DrawMesh(cache.mesh, cache.material, rl.Matrix(1))
+			rl.DrawMesh(cache.mesh, mat, rl.Matrix(1))
 		}
 	} else if m != nil && len(m.fields) > 0 && xi >= 0 && yi >= 0 && zi >= 0 {
 		// Point-cloud fallback (no triangles).
