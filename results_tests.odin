@@ -3,6 +3,7 @@ package palantir
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
+import "core:path/filepath"
 import "core:strings"
 import "core:sync"
 import "core:testing"
@@ -807,4 +808,39 @@ test_remembered_columns :: proc(t: ^testing.T) {
 	testing.expect(t, rs.remembered.v == "alpha", "current selection synced to name")
 	testing.expect(t, rs.remembered.lat == "missing", "unresolvable selection keeps prior name")
 	testing.expect(t, rs.remembered.x == "Beta", "exact column name stored")
+}
+
+// Settings must live in the platform config directory (e.g. ~/.config/palantir
+// on Linux), never in the working directory, and that directory must be created
+// on demand and writable.
+@(test)
+test_settings_path_platform_config :: proc(t: ^testing.T) {
+	when ODIN_OS != .JS {
+		path := settings_path()
+		defer delete(path)
+		testing.expect(t, path != "", "expected a settings path on native")
+		if path == "" {return}
+
+		cwd, err := os.get_working_directory(context.allocator)
+		testing.expect(t, err == nil, "could not get working directory")
+		if err != nil {return}
+		defer delete(cwd)
+
+		rel, rerr := filepath.rel(cwd, path)
+		testing.expect(t, rerr == nil, "could not compute path relative to cwd")
+		if rerr != nil {return}
+		defer delete(rel)
+		testing.expect(t, strings.has_prefix(rel, ".."), "settings must be outside the working directory")
+
+		// The config directory is created on demand and writable.
+		probe, jerr := filepath.join([]string{filepath.dir(path), "palantir_write_probe.tmp"}, context.allocator)
+		testing.expect(t, jerr == nil, "could not build probe path")
+		if jerr != nil {return}
+		defer delete(probe)
+		werr := os.write_entire_file_from_string(probe, "probe")
+		testing.expect(t, werr == nil, "config directory must be writable")
+		if werr == nil {
+			os.remove(probe)
+		}
+	}
 }

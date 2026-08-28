@@ -68,7 +68,8 @@ default_config :: proc() -> App_Config {
 	return App_Config{width = 1280, height = 720, title = "Palantir", target_fps = 60}
 }
 
-// Persisted between runs in SETTINGS_PATH (native builds only).
+// Persisted between runs in the platform config directory (native builds only);
+// see settings_path below.
 App_Settings :: struct {
 	theme_index:    int,
 	window_width:   i32,
@@ -91,7 +92,52 @@ App_Settings :: struct {
 	plot_lon_col:   string,
 }
 
-SETTINGS_PATH :: "palantir_gui.json"
+// Location of the persisted settings file, kept out of the working directory so
+// the app can run from anywhere:
+//   Linux:   $XDG_CONFIG_HOME/palantir, defaulting to ~/.config/palantir
+//   macOS:   ~/Library/Application Support/palantir
+//   Windows: %APPDATA%/palantir
+// Returns "" when no config directory can be determined or on web builds.
+settings_dir :: proc() -> string {
+	when ODIN_OS == .Windows {
+		if base := os.get_env("APPDATA", context.allocator); base != "" {
+			defer delete(base)
+			return strings.concatenate({base, "\\palantir"})
+		}
+	} else when ODIN_OS == .Darwin {
+		if home := os.get_env("HOME", context.allocator); home != "" {
+			defer delete(home)
+			return strings.concatenate({home, "/Library/Application Support/palantir"})
+		}
+	} else when ODIN_OS != .JS {
+		if xdg := os.get_env("XDG_CONFIG_HOME", context.allocator); xdg != "" {
+			defer delete(xdg)
+			return strings.concatenate({xdg, "/palantir"})
+		}
+		if home := os.get_env("HOME", context.allocator); home != "" {
+			defer delete(home)
+			return strings.concatenate({home, "/.config/palantir"})
+		}
+	}
+	return ""
+}
+
+// Full path to the settings file (settings_dir + "palantir_gui.json"), creating
+// the directory on demand. Falls back to a file in the working directory when no
+// platform config directory is available. Returns "" on web builds. The caller
+// owns the returned string.
+settings_path :: proc() -> string {
+	when ODIN_OS == .JS {
+		return ""
+	} else {
+		if dir := settings_dir(); dir != "" {
+			defer delete(dir)
+			_ = os.make_directory_all(dir)
+			return strings.concatenate({dir, "/palantir_gui.json"})
+		}
+		return "palantir_gui.json"
+	}
+}
 
 default_settings :: proc() -> App_Settings {
 	cfg := default_config()
@@ -106,10 +152,13 @@ default_settings :: proc() -> App_Settings {
 load_settings :: proc() -> App_Settings {
 	s := default_settings()
 	when ODIN_OS != .JS {
-		if data, err := os.read_entire_file_from_path(SETTINGS_PATH, context.allocator);
-		   err == nil {
-			defer delete(data)
-			_ = json.unmarshal(data, &s)
+		if path := settings_path(); path != "" {
+			defer delete(path)
+			if data, err := os.read_entire_file_from_path(path, context.allocator);
+			   err == nil {
+				defer delete(data)
+				_ = json.unmarshal(data, &s)
+			}
 		}
 	}
 	if s.ui_scale_zoom <= 0 {s.ui_scale_zoom = 1}
@@ -144,8 +193,11 @@ save_settings :: proc(app: ^App) {
 		}
 		if data, err := json.marshal(s); err == nil {
 			defer delete(data)
-			if werr := os.write_entire_file(SETTINGS_PATH, data); werr != nil {
-				fmt.eprintfln("[gui] could not save settings: %v", werr)
+			if path := settings_path(); path != "" {
+				defer delete(path)
+				if werr := os.write_entire_file(path, data); werr != nil {
+					fmt.eprintfln("[gui] could not save settings: %v", werr)
+				}
 			}
 		}
 	}
