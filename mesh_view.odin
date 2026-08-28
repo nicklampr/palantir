@@ -148,14 +148,15 @@ draw_3d_axis_labels :: proc(
 	}
 }
 
-// Forward direction from yaw/pitch (Y-up).
+// Forward direction from yaw/pitch (Z-up): yaw rotates in the XY plane, pitch
+// tilts above/below it. At pitch=0, yaw=0 the camera faces +Y.
 cam_forward :: proc(yaw, pitch: f32) -> rl.Vector3 {
 	cp := math.cos(pitch)
-	return rl.Vector3{cp * math.sin(yaw), math.sin(pitch), cp * math.cos(yaw)}
+	return rl.Vector3{cp * math.sin(yaw), cp * math.cos(yaw), math.sin(pitch)}
 }
 
 cam_right :: proc(yaw, pitch: f32) -> rl.Vector3 {
-	return v3_normalize(v3_cross(cam_forward(yaw, pitch), rl.Vector3{0, 1, 0}))
+	return v3_normalize(v3_cross(cam_forward(yaw, pitch), rl.Vector3{0, 0, 1}))
 }
 
 // Camera update: WASD move, right-drag look, wheel speed. `active` gates all
@@ -183,7 +184,7 @@ mesh_view_update :: proc(mv: ^Mesh_View, rect: rl.Rectangle, active: bool) {
 
 	forward := cam_forward(mv.yaw, mv.pitch)
 	right := cam_right(mv.yaw, mv.pitch)
-	up := rl.Vector3{0, 1, 0}
+	up := rl.Vector3{0, 0, 1}
 
 	vel := rl.Vector3{}
 	if rl.IsKeyDown(.W) {vel = v3_add(vel, forward)}
@@ -201,8 +202,9 @@ mesh_view_update :: proc(mv: ^Mesh_View, rect: rl.Rectangle, active: bool) {
 	}
 }
 
-// Fits the camera to a world-space bounding box: zero height (y = 0), looking
-// horizontally at it from outside. Shared by the mesh and 3D quiver views.
+// Fits the camera to a world-space bounding box in the Z-up convention: an
+// elevated 3/4 view from outside the box, looking at its center. Shared by the
+// mesh and 3D quiver views.
 view_fit_bounds :: proc(mv: ^Mesh_View, minp, maxp: [3]f64) {
 	center := rl.Vector3 {
 		f32((minp[0] + maxp[0]) * 0.5),
@@ -214,10 +216,20 @@ view_fit_bounds :: proc(mv: ^Mesh_View, minp, maxp: [3]f64) {
 		diag = 1
 	}
 	mv.yaw = 0
-	mv.pitch = 0
+	mv.pitch = -0.35
 	dist := diag * 1.5
-	mv.pos = rl.Vector3{center.x, 0, center.z - dist}
+	mv.pos = v3_sub(center, v3_scale(cam_forward(mv.yaw, mv.pitch), dist))
 	mv.speed = diag * 0.5
+}
+
+// Ground grid on the horizontal (XY) plane for the Z-up convention. raylib's
+// DrawGrid lays its grid on the XZ plane, so the model matrix is rotated 90°
+// about X to bring it down onto the XY plane.
+draw_ground_grid :: proc(slices: c.int, spacing: f32) {
+	rlgl.PushMatrix()
+	rlgl.Rotatef(90, 1, 0, 0)
+	rl.DrawGrid(slices, spacing)
+	rlgl.PopMatrix()
 }
 
 // Frees the GPU mesh and the CPU buffers it references.
@@ -380,7 +392,7 @@ draw_mesh_view :: proc(
 	cam := rl.Camera3D {
 		position   = mv.pos,
 		target     = v3_add(mv.pos, cam_forward(mv.yaw, mv.pitch)),
-		up         = {0, 1, 0},
+		up         = {0, 0, 1},
 		fovy       = 45,
 		projection = .PERSPECTIVE,
 	}
@@ -417,8 +429,8 @@ draw_mesh_view :: proc(
 	rl.ClearBackground(theme.window_bg)
 	rl.BeginMode3D(cam)
 
-	rl.DrawGrid(20, 1.0)
-
+	rlgl.DisableBackfaceCulling()
+	draw_ground_grid(20, 1.0)
 	draw_3d_axis_arrows(axis_origin, axis_len)
 
 	// Thin sheets (e.g. the wake) must be visible from both sides, so draw the
@@ -426,7 +438,6 @@ draw_mesh_view :: proc(
 	// the shared unlit shader and never unloaded, so it never frees the shader.
 	mat := rl.LoadMaterialDefault()
 	mat.shader = rs.mesh_shader
-	rlgl.DisableBackfaceCulling()
 	if cache.mesh.vaoId != 0 {
 		if mv.wireframe {
 			rlgl.EnableWireMode()

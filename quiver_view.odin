@@ -140,7 +140,7 @@ draw_quiver_view :: proc(
 	cam := rl.Camera3D {
 		position   = mv.pos,
 		target     = v3_add(mv.pos, cam_forward(mv.yaw, mv.pitch)),
-		up         = {0, 1, 0},
+		up         = {0, 0, 1},
 		fovy       = 45,
 		projection = .PERSPECTIVE,
 	}
@@ -178,8 +178,7 @@ draw_quiver_view :: proc(
 	rl.ClearBackground(theme.window_bg)
 	rl.BeginMode3D(cam)
 
-	rl.DrawGrid(20, 1.0)
-
+	draw_ground_grid(20, 1.0)
 	draw_3d_axis_arrows(axis_origin, axis_len)
 
 	for a in arrows {
