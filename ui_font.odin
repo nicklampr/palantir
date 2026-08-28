@@ -1,15 +1,18 @@
 package palantir
 
-// Bundled app font (see fonts/Inter-Regular.ttf), loaded once at startup and
-// used for every piece of text in the app — including raygui controls via
-// `rl.GuiSetFont` and the offscreen PNG plot exports. raylib's `DrawText` and
-// `MeasureText` always render with the built-in default font, so the app routes
-// all text through the `draw_text`/`measure_text` wrappers below.
+// Bundled app font (see fonts/Inter-Regular.ttf), embedded into the binary at
+// compile time so the app renders text from any working directory (no runtime
+// dependency on a fonts/ folder next to the executable). Used for every piece
+// of text in the app — including raygui controls via `rl.GuiSetFont` and the
+// offscreen PNG plot exports. raylib's `DrawText` and `MeasureText` always
+// render with the built-in default font, so the app routes all text through
+// the `draw_text`/`measure_text` wrappers below.
 
 import "core:c"
 import rl "vendor:raylib"
 
-APP_FONT_PATH :: "fonts/Inter-Regular.ttf"
+// The font file, pulled into the data section at build time by `#load`.
+APP_FONT_DATA :: #load("fonts/Inter-Regular.ttf", []u8)
 // Atlas pixel size. Text renders from ~10*sc up to ~30*sc (up to ~60 px at
 // 200% UI zoom on a 4K display), so a generous base size keeps glyphs crisp.
 APP_FONT_BASE_SIZE :: 96
@@ -17,8 +20,8 @@ APP_FONT_BASE_SIZE :: 96
 app_font: rl.Font
 app_font_loaded: bool
 
-// Loads the bundled font. On failure (file missing, web build) the app falls
-// back to raylib's built-in default font.
+// Loads the embedded font. On failure (web build) the app falls back to
+// raylib's built-in default font.
 load_app_font :: proc() {
 	app_font = rl.GetFontDefault()
 	app_font_loaded = false
@@ -27,52 +30,53 @@ load_app_font :: proc() {
 		// area estimate is too small for Inter at 96px: the atlas comes out
 		// 1024x512 and the last row of glyphs ('y'..'~') is silently dropped.
 		// Build the font manually with the skyline packer (packMethod 1) instead.
+		// The #load constant isn't addressable, so copy the embedded bytes into
+		// a runtime buffer for raylib to parse (it doesn't retain the buffer).
+		buf := make([]u8, len(APP_FONT_DATA), context.allocator)
+		defer delete(buf)
+		copy(buf, APP_FONT_DATA)
+
 		GLYPH_COUNT :: 95 // ASCII 32..126
-		data_size: c.int
-		data := rl.LoadFileData(APP_FONT_PATH, &data_size)
-		if data != nil {
-			codepoints: [GLYPH_COUNT]rune
-			for i in 0 ..< GLYPH_COUNT {
-				codepoints[i] = rune(32 + i)
-			}
-			glyph_count: c.int
-			glyphs := rl.LoadFontData(
-				data,
-				data_size,
-				APP_FONT_BASE_SIZE,
-				&codepoints[0],
-				GLYPH_COUNT,
-				.DEFAULT,
-				&glyph_count,
-			)
-			if glyphs != nil && glyph_count > 0 {
-				recs: [^]rl.Rectangle
-				atlas := rl.GenImageFontAtlas(glyphs, &recs, glyph_count, APP_FONT_BASE_SIZE, 4, 1)
-				if atlas.data != nil {
-					font := rl.Font {
-						baseSize     = APP_FONT_BASE_SIZE,
-						glyphCount   = glyph_count,
-						glyphPadding = 4,
-						texture      = rl.LoadTextureFromImage(atlas),
-						recs         = recs,
-						glyphs       = glyphs,
-					}
-					for i in 0 ..< glyph_count {
-						rl.UnloadImage(glyphs[i].image)
-						glyphs[i].image = rl.ImageFromImage(atlas, recs[i])
-					}
-					rl.UnloadImage(atlas)
-					if font.texture.id != 0 {
-						app_font = font
-						app_font_loaded = true
-					} else {
-						rl.UnloadFont(font)
-					}
-				} else {
-					rl.UnloadFontData(glyphs, glyph_count)
+		codepoints: [GLYPH_COUNT]rune
+		for i in 0 ..< GLYPH_COUNT {
+			codepoints[i] = rune(32 + i)
+		}
+		glyph_count: c.int
+		glyphs := rl.LoadFontData(
+			&buf[0],
+			c.int(len(buf)),
+			APP_FONT_BASE_SIZE,
+			&codepoints[0],
+			GLYPH_COUNT,
+			.DEFAULT,
+			&glyph_count,
+		)
+		if glyphs != nil && glyph_count > 0 {
+			recs: [^]rl.Rectangle
+			atlas := rl.GenImageFontAtlas(glyphs, &recs, glyph_count, APP_FONT_BASE_SIZE, 4, 1)
+			if atlas.data != nil {
+				font := rl.Font {
+					baseSize     = APP_FONT_BASE_SIZE,
+					glyphCount   = glyph_count,
+					glyphPadding = 4,
+					texture      = rl.LoadTextureFromImage(atlas),
+					recs         = recs,
+					glyphs       = glyphs,
 				}
+				for i in 0 ..< glyph_count {
+					rl.UnloadImage(glyphs[i].image)
+					glyphs[i].image = rl.ImageFromImage(atlas, recs[i])
+				}
+				rl.UnloadImage(atlas)
+				if font.texture.id != 0 {
+					app_font = font
+					app_font_loaded = true
+				} else {
+					rl.UnloadFont(font)
+				}
+			} else {
+				rl.UnloadFontData(glyphs, glyph_count)
 			}
-			rl.UnloadFileData(data)
 		}
 	}
 	// Text glyphs are crisp at 1:1; bilinear needs no mipmaps (TRILINEAR would
