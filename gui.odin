@@ -77,6 +77,18 @@ App_Settings :: struct {
 	ui_scale_zoom:  f32,
 	// Recently browsed folders (most recent first).
 	recent_folders: []string,
+	// Last active plot type + the last column selection per slot, remembered
+	// by name so they survive restarts and dataset reloads.
+	plot_id:        int,
+	plot_x_col:     string,
+	plot_y_col:     string,
+	plot_z_col:     string,
+	plot_h_col:     string,
+	plot_u_col:     string,
+	plot_v_col:     string,
+	plot_w_col:     string,
+	plot_lat_col:   string,
+	plot_lon_col:   string,
 }
 
 SETTINGS_PATH :: "palantir_gui.json"
@@ -109,6 +121,8 @@ save_settings :: proc(app: ^App) {
 		if !rl.IsWindowReady() {
 			return // e.g. headless tests: no window/DPI context to read
 		}
+		// Refresh the remembered column names from the live selections.
+		results_sync_remembered(app)
 		dpi := rl.GetWindowScaleDPI()
 		scl := max(dpi.x, dpi.y, 1)
 		s := App_Settings {
@@ -117,6 +131,16 @@ save_settings :: proc(app: ^App) {
 			window_height  = i32(math.round(f32(rl.GetScreenHeight()) / scl)),
 			ui_scale_zoom  = app.ui_scale_zoom,
 			recent_folders = app.recents,
+			plot_id        = app.results.plot.id,
+			plot_x_col     = app.results.remembered.x,
+			plot_y_col     = app.results.remembered.y,
+			plot_z_col     = app.results.remembered.z,
+			plot_h_col     = app.results.remembered.h,
+			plot_u_col     = app.results.remembered.u,
+			plot_v_col     = app.results.remembered.v,
+			plot_w_col     = app.results.remembered.w,
+			plot_lat_col   = app.results.remembered.lat,
+			plot_lon_col   = app.results.remembered.lon,
 		}
 		if data, err := json.marshal(s); err == nil {
 			defer delete(data)
@@ -276,6 +300,20 @@ app_init :: proc(app: ^App, config := App_Config{}) {
 
 	app.recents = settings.recent_folders
 	results_init(app)
+	// Restore the last plot type and column selections (by name).
+	rs := &app.results
+	rs.remembered = Plot_Columns {
+		x   = settings.plot_x_col,
+		y   = settings.plot_y_col,
+		z   = settings.plot_z_col,
+		h   = settings.plot_h_col,
+		u   = settings.plot_u_col,
+		v   = settings.plot_v_col,
+		w   = settings.plot_w_col,
+		lat = settings.plot_lat_col,
+		lon = settings.plot_lon_col,
+	}
+	rs.plot.id = clamp(settings.plot_id, 0, len(PLOT_NAMES) - 1)
 	cwd, _ := os.get_working_directory(context.temp_allocator)
 	results_set_root(app, cwd)
 	refresh_palette_recents(app)

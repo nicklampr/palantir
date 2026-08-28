@@ -60,6 +60,17 @@ Results_Plot :: struct {
 	bins: int, // histogram bin count (0 = auto)
 }
 
+// The nine column-selection slots, keyed by name rather than index. This is
+// the persistent form of Results_Plot's indices: selections survive across
+// sessions (saved to settings) and across dataset reloads by resolving the
+// remembered names against the active dataset's columns.
+Plot_Columns :: struct {
+	x, y, z:  string,
+	h:        string, // hue / histogram column / mesh color
+	u, v, w:  string, // quiver vector components
+	lat, lon: string,
+}
+
 Results_State :: struct {
 	root:          string,
 	entries:       []File_Entry,
@@ -108,6 +119,12 @@ Results_State :: struct {
 	quiver_view:   Mesh_View,
 	// Arrow-size multiplier for the 2D / 3D quiver widgets (see quiver.odin).
 	quiver_scale:  f32,
+	// Remembered column names (persisted in settings); applied to the plot
+	// indices whenever a new dataset becomes active.
+	remembered:    Plot_Columns,
+	applied_to_ds: rawptr, // dataset the remembered names were last applied to
+	// Next frame time (rl.GetTime) at which to poll file mtimes for changes.
+	auto_refresh_next: f64,
 }
 
 // --- state lifecycle ---------------------------------------------------------
@@ -134,6 +151,9 @@ results_init :: proc(app: ^App) {
 	rs.mesh_view = mesh_view_init()
 	rs.quiver_view = mesh_view_init()
 	rs.quiver_scale = 1.0
+	rs.remembered = {}
+	rs.applied_to_ds = nil
+	rs.auto_refresh_next = 0
 }
 
 results_destroy :: proc(app: ^App) {
@@ -171,6 +191,16 @@ results_destroy :: proc(app: ^App) {
 		rl.UnloadShader(rs.mesh_shader)
 		rs.mesh_shader = {}
 	}
+	if rs.remembered.x != "" {delete(rs.remembered.x)}
+	if rs.remembered.y != "" {delete(rs.remembered.y)}
+	if rs.remembered.z != "" {delete(rs.remembered.z)}
+	if rs.remembered.h != "" {delete(rs.remembered.h)}
+	if rs.remembered.u != "" {delete(rs.remembered.u)}
+	if rs.remembered.v != "" {delete(rs.remembered.v)}
+	if rs.remembered.w != "" {delete(rs.remembered.w)}
+	if rs.remembered.lat != "" {delete(rs.remembered.lat)}
+	if rs.remembered.lon != "" {delete(rs.remembered.lon)}
+	rs.remembered = {}
 }
 
 results_destroy_mesh :: proc(app: ^App) {
@@ -602,7 +632,86 @@ results_sync_datasets :: proc(app: ^App) {
 	} else if rs.active_ds < 0 || rs.active_ds >= len(rs.datasets) {
 		rs.active_ds = len(rs.datasets) - 1
 	}
+
+	// A newly active dataset gets its remembered column names re-resolved into
+	// indices, so the last selections follow across files and sessions. Only on
+	// dataset transitions so manual selections mid-session survive.
+	if ds := active_dataset(rs); ds != nil && rawptr(ds) != rs.applied_to_ds {
+		results_apply_remembered(app)
+	}
+
 	results_compute_raw_widths(app)
+}
+
+// --- remembered column selections --------------------------------------------
+
+// Index of `name` in the dataset's columns (case-insensitive); -1 when absent
+// or `name` is empty.
+results_col_index :: proc(ds: ^Dataset, name: string) -> int {
+	if ds == nil || len(name) == 0 {
+		return -1
+	}
+	for c, i in ds.columns {
+		if equal_ci(c.name, name) {
+			return i
+		}
+	}
+	return -1
+}
+
+// Applies the remembered column names to the plot indices for the active
+// dataset (a slot the current dataset doesn't have falls back to -1 = auto).
+// Records the dataset so it only runs once per dataset transition.
+results_apply_remembered :: proc(app: ^App) {
+	rs := &app.results
+	ds := active_dataset(rs)
+	if ds == nil {
+		return
+	}
+	rs.plot.x_col = results_col_index(ds, rs.remembered.x)
+	rs.plot.y_col = results_col_index(ds, rs.remembered.y)
+	rs.plot.z_col = results_col_index(ds, rs.remembered.z)
+	rs.plot.h_col = results_col_index(ds, rs.remembered.h)
+	rs.plot.u_col = results_col_index(ds, rs.remembered.u)
+	rs.plot.v_col = results_col_index(ds, rs.remembered.v)
+	rs.plot.w_col = results_col_index(ds, rs.remembered.w)
+	rs.plot.lat_col = results_col_index(ds, rs.remembered.lat)
+	rs.plot.lon_col = results_col_index(ds, rs.remembered.lon)
+	rs.applied_to_ds = rawptr(ds)
+}
+
+// Stores `name` in a remembered slot, preserving the old value when `name` is
+// empty (so an unresolvable selection never wipes a saved one).
+remember_slot :: proc(slot: ^string, name: string) {
+	if len(name) == 0 || name == slot^ {
+		return
+	}
+	if slot^ != "" {
+		delete(slot^)
+	}
+	slot^ = strings.clone(name)
+}
+
+// Refreshes the remembered column names from the current plot selections (called
+// before saving settings, so the file records what the user last picked).
+results_sync_remembered :: proc(app: ^App) {
+	rs := &app.results
+	ds := active_dataset(rs)
+	slot_name :: proc(ds: ^Dataset, idx: int) -> string {
+		if ds == nil || idx < 0 || idx >= len(ds.columns) {
+			return ""
+		}
+		return ds.columns[idx].name
+	}
+	remember_slot(&rs.remembered.x, slot_name(ds, rs.plot.x_col))
+	remember_slot(&rs.remembered.y, slot_name(ds, rs.plot.y_col))
+	remember_slot(&rs.remembered.z, slot_name(ds, rs.plot.z_col))
+	remember_slot(&rs.remembered.h, slot_name(ds, rs.plot.h_col))
+	remember_slot(&rs.remembered.u, slot_name(ds, rs.plot.u_col))
+	remember_slot(&rs.remembered.v, slot_name(ds, rs.plot.v_col))
+	remember_slot(&rs.remembered.w, slot_name(ds, rs.plot.w_col))
+	remember_slot(&rs.remembered.lat, slot_name(ds, rs.plot.lat_col))
+	remember_slot(&rs.remembered.lon, slot_name(ds, rs.plot.lon_col))
 }
 
 // --- recents -----------------------------------------------------------------
@@ -705,22 +814,69 @@ results_focus_search :: proc(app: ^App) {
 	rs.show_recents = false
 }
 
-// Reloads the selected datasets from disk so plots reflect changed files.
-results_reload_datasets :: proc(app: ^App) {
+// How often (seconds) the app polls loaded files for mtime changes. Cheap
+// stat() calls; only files that actually changed get re-read and re-parsed.
+AUTO_REFRESH_INTERVAL :: 5.0
+
+// Reloads only the loaded datasets whose source file changed on disk (mtime
+// differs from when it was loaded, or the file vanished). Datasets whose file
+// is unchanged are left untouched, so this stays cheap. Returns true when
+// anything was reloaded. Also invalidates the cached 3D mesh if its source
+// changed, re-applies the remembered column names, and recomputes the raw
+// table widths.
+results_refresh_changed :: proc(app: ^App) -> bool {
 	rs := &app.results
-	for ds in rs.datasets {
-		if ds != nil {
-			dataset_destroy(ds)
-			free(ds)
-		}
+	if len(rs.datasets) == 0 {
+		return false
 	}
-	clear(&rs.datasets)
-	// results_sync_datasets reloads every path still in rs.selected.
-	results_sync_datasets(app)
+	changed := false
+	mesh_dirty := false
+	kept := 0
+	for ds in rs.datasets {
+		if ds == nil {
+			continue
+		}
+		// Check for changes before freeing anything (ds.path is owned).
+		t, err := os.last_write_time_by_name(ds.path)
+		reload := err != nil || t != ds.mtime
+		if !reload {
+			rs.datasets[kept] = ds
+			kept += 1
+			continue
+		}
+		if rs.mesh_path != "" && rs.mesh_path == ds.path {
+			mesh_dirty = true
+		}
+		// Snapshot the path: dataset_destroy frees it, and we still need it to
+		// reload from the same file.
+		path := strings.clone(ds.path)
+		dataset_destroy(ds)
+		free(ds)
+		if nds, ld_ok := load_dataset(path); ld_ok {
+			rs.datasets[kept] = nds
+			kept += 1
+			changed = true
+		}
+		delete(path)
+	}
+	resize(&rs.datasets, kept)
+
+	if mesh_dirty {
+		results_destroy_mesh(app)
+	}
+	if changed {
+		// The reloaded dataset has fresh columns; re-resolve remembered names.
+		if ds := active_dataset(rs); ds != nil && rawptr(ds) != rs.applied_to_ds {
+			results_apply_remembered(app)
+		}
+		results_compute_raw_widths(app)
+	}
+	return changed
 }
 
-// Ctrl+R / "Refresh plots": re-scan the folder and reload the selected data,
-// preserving the current selection across the rescan.
+// Ctrl+R / "Refresh plots": re-scan the folder (to catch new files), preserve
+// the current selection across the rescan, then reload only the files that
+// changed on disk.
 results_refresh :: proc(app: ^App) {
 	rs := &app.results
 	selected_paths := make([dynamic]string, 0, len(rs.selected), context.temp_allocator)
@@ -739,7 +895,7 @@ results_refresh :: proc(app: ^App) {
 			}
 		}
 	}
-	results_reload_datasets(app)
+	results_refresh_changed(app)
 }
 
 // Global keyboard shortcuts for the results explorer (ignored while the
@@ -850,6 +1006,17 @@ draw_results_view :: proc(app: ^App) {
 	rs.text_enter = false
 
 	results_handle_shortcuts(app)
+
+	// Periodic mtime poll: reload only files that changed on disk, so plots
+	// track external writers (e.g. a solver regenerating output). Skipped while
+	// the palette or a dropdown is open so popups never see columns vanish
+	// mid-selection.
+	if rl.GetTime() >= rs.auto_refresh_next &&
+	   !app.palette.open &&
+	   !results_any_dropdown_open(rs) {
+		rs.auto_refresh_next = rl.GetTime() + AUTO_REFRESH_INTERVAL
+		results_refresh_changed(app)
+	}
 
 	// Discard queued characters while no text field is focused, so stale input
 	// can never be injected into a box the moment it is clicked. A dropdown's
@@ -1597,6 +1764,11 @@ results_ensure_mesh :: proc(app: ^App, ds: ^Dataset) -> ^Mesh_Dataset {
 		rs.mesh = m
 		rs.mesh_path = strings.clone(ds.path)
 		rs.mesh_view.fit = true
+		// Restore the last-used mesh field selection (remembered by name).
+		rs.plot.x_col = mesh_field_index(m, rs.remembered.x)
+		rs.plot.y_col = mesh_field_index(m, rs.remembered.y)
+		rs.plot.z_col = mesh_field_index(m, rs.remembered.z)
+		rs.plot.h_col = mesh_field_index(m, rs.remembered.h)
 		return m
 	}
 	return nil

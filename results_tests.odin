@@ -3,6 +3,7 @@ package palantir
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
+import "core:strings"
 import "core:sync"
 import "core:testing"
 import "core:time"
@@ -716,4 +717,94 @@ test_hue_nan_ignored_in_domain :: proc(t: ^testing.T) {
 	// NaN excluded; the single surviving value makes a degenerate domain that
 	// hue_domain_of expands by 1 so the colormap never divides by zero.
 	testing.expect(t, lo == 4 && hi == 5, "NaN excluded; degenerate domain expanded")
+}
+
+@(test)
+test_refresh_changed_reloads_modified :: proc(t: ^testing.T) {
+	// The mtime-based refresh must reload only files that changed on disk,
+	// leaving untouched datasets (and their pointers) alone.
+	sync.mutex_lock(&global_app_test_mutex)
+	defer sync.mutex_unlock(&global_app_test_mutex)
+	default_app = {}
+	defer default_app = {}
+	app := &default_app
+
+	results_init(app)
+	defer results_destroy(app)
+
+	tmp := fmt_tmp_path("refresh")
+	defer os.remove(tmp)
+
+	err := os.write_entire_file_from_string(tmp, `{"x":[1.0,2.0],"y":[10.0,20.0]}`)
+	testing.expect(t, err == nil, "failed to write tmp json")
+	if err != nil {return}
+
+	ds, ok := load_dataset(tmp)
+	testing.expect(t, ok, "failed to load tmp json")
+	if !ok {return}
+	append(&app.results.datasets, ds)
+	app.results.active_ds = 0
+	before := rawptr(ds)
+
+	// Unchanged file: no reload, dataset kept in place.
+	testing.expect(t, !results_refresh_changed(app), "no reload when the file is unchanged")
+	testing.expect(t, len(app.results.datasets) == 1 && rawptr(app.results.datasets[0]) == before, "unchanged dataset kept")
+
+	// Modify the file and give the mtime a chance to advance.
+	time.sleep(20 * time.Millisecond)
+	werr := os.write_entire_file_from_string(tmp, `{"x":[3.0,4.0],"y":[30.0,40.0]}`)
+	testing.expect(t, werr == nil, "failed to rewrite tmp json")
+	if werr != nil {return}
+
+	testing.expect(t, results_refresh_changed(app), "reload triggered on mtime change")
+	testing.expect(t, len(app.results.datasets) == 1 && rawptr(app.results.datasets[0]) != before, "dataset replaced after change")
+	if len(app.results.datasets) == 0 {return}
+	xc := ds_column(app.results.datasets[0], "x")
+	testing.expect(t, xc != nil && len(xc.floats) == 2 && xc.floats[0] == 3.0, "reloaded dataset has new contents")
+
+	// No further change: stays put again.
+	testing.expect(t, !results_refresh_changed(app), "no reload when unchanged after reload")
+}
+
+@(test)
+test_remembered_columns :: proc(t: ^testing.T) {
+	// The remembered column names (persisted in settings) must resolve into
+	// indices for the active dataset and re-sync from live selections without
+	// wiping slots whose selection doesn't resolve.
+	sync.mutex_lock(&global_app_test_mutex)
+	defer sync.mutex_unlock(&global_app_test_mutex)
+	default_app = {}
+	defer default_app = {}
+	app := &default_app
+
+	results_init(app)
+	defer results_destroy(app)
+
+	ds := new(Dataset)
+	ds.name = strings.clone("rem")
+	ds.n_rows = 3
+	ds.columns = make([]Column, 3)
+	ds.columns[0].name = strings.clone("alpha")
+	ds.columns[1].name = strings.clone("Beta")
+	ds.columns[2].name = strings.clone("gamma")
+	append(&app.results.datasets, ds)
+	app.results.active_ds = 0
+
+	rs := &app.results
+	rs.remembered.x = strings.clone("Beta")
+	rs.remembered.h = strings.clone("gamma")
+	rs.remembered.lat = strings.clone("missing")
+
+	results_apply_remembered(app)
+	testing.expect(t, rs.plot.x_col == 1, "remembered name resolved case-insensitively")
+	testing.expect(t, rs.plot.h_col == 2, "remembered h resolved")
+	testing.expect(t, rs.plot.lat_col == -1, "missing column -> -1 (auto)")
+
+	// Syncing records the current selections by name and preserves a slot
+	// whose selection can't be resolved (so a save never wipes a good one).
+	rs.plot.v_col = 0
+	results_sync_remembered(app)
+	testing.expect(t, rs.remembered.v == "alpha", "current selection synced to name")
+	testing.expect(t, rs.remembered.lat == "missing", "unresolvable selection keeps prior name")
+	testing.expect(t, rs.remembered.x == "Beta", "exact column name stored")
 }

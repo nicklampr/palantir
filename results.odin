@@ -54,6 +54,9 @@ Dataset :: struct {
 	path:    string,
 	n_rows:  int,
 	columns: []Column,
+	// Modification time of `path` at load time, used to detect when the file
+	// changes so plots can be refreshed efficiently (see results_refresh_changed).
+	mtime: time.Time,
 	// Cached, sampled map input (see Map_Cache), built on demand.
 	map_cache: Map_Cache,
 }
@@ -633,14 +636,23 @@ bool_token_value :: proc(t: string) -> bool {
 load_dataset :: proc(path: string) -> (^Dataset, bool) {
 	ext := file_extension(path)
 	base := file_base_name(path)
+	ds: ^Dataset
+	ok: bool
 	switch ext {
 	case ".csv":
-		return load_csv_dataset(path, base)
+		ds, ok = load_csv_dataset(path, base)
 	case ".json":
-		return load_json_dataset(path, base)
+		ds, ok = load_json_dataset(path, base)
 	case:
 		return nil, false
 	}
+	if ok && ds != nil {
+		// Record the source file's modification time for change detection.
+		if t, terr := os.last_write_time_by_name(path); terr == nil {
+			ds.mtime = t
+		}
+	}
+	return ds, ok
 }
 
 file_extension :: proc(path: string) -> string {
