@@ -98,6 +98,56 @@ v3_cross :: proc(a, b: rl.Vector3) -> rl.Vector3 {
 	return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}
 }
 
+// Axis colors (matplotlib convention): X = red, Y = green, Z = blue.
+AXIS_X_COLOR :: rl.Color{230, 90, 90, 255}
+AXIS_Y_COLOR :: rl.Color{90, 200, 90, 255}
+AXIS_Z_COLOR :: rl.Color{90, 130, 230, 255}
+
+// Axis unit directions (positive sense).
+AXIS_DIRS := [3]rl.Vector3{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}
+AXIS_NAMES := [3]cstring{"X", "Y", "Z"}
+AXIS_COLORS := [3]rl.Color{AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR}
+
+// Draws X/Y/Z axis-direction arrows at `origin` (the data's min corner): each
+// `len` world units long with a cone head pointing along the positive axis.
+// Must be called inside a 3D mode.
+draw_3d_axis_arrows :: proc(origin: rl.Vector3, len: f32) {
+	if len <= 0 {
+		return
+	}
+	for i in 0 ..< 3 {
+		head := v3_add(origin, v3_scale(AXIS_DIRS[i], len))
+		rl.DrawLine3D(origin, head, AXIS_COLORS[i])
+		head_len := len * 0.18
+		base := v3_sub(head, v3_scale(AXIS_DIRS[i], head_len))
+		rl.DrawCylinderEx(base, head, head_len * 0.5, 0, 6, AXIS_COLORS[i])
+	}
+}
+
+// Screen-space X/Y/Z labels for the axis arrows, drawn over the blitted render
+// texture of a 3D scene. `cam` and the render-texture dims must match the
+// scene the arrows were drawn in; `rect` is the on-screen destination of the
+// blit (the scene fills it, so RT pixels map directly).
+draw_3d_axis_labels :: proc(
+	cam: rl.Camera3D,
+	origin: rl.Vector3,
+	len: f32,
+	rt_w, rt_h: c.int,
+	rect: rl.Rectangle,
+	sc: f32,
+) {
+	if len <= 0 {
+		return
+	}
+	for i in 0 ..< 3 {
+		pos := v3_add(origin, v3_scale(AXIS_DIRS[i], len * 1.12))
+		s := rl.GetWorldToScreenEx(pos, cam, rt_w, rt_h)
+		sx := rect.x + s.x * rect.width / f32(rt_w)
+		sy := rect.y + s.y * rect.height / f32(rt_h)
+		draw_text(AXIS_NAMES[i], i32(sx - 4), i32(sy - 10 * sc), i32(13 * sc), AXIS_COLORS[i])
+	}
+}
+
 // Forward direction from yaw/pitch (Y-up).
 cam_forward :: proc(yaw, pitch: f32) -> rl.Vector3 {
 	cp := math.cos(pitch)
@@ -151,13 +201,9 @@ mesh_view_update :: proc(mv: ^Mesh_View, rect: rl.Rectangle, active: bool) {
 	}
 }
 
-// Fits the camera to the mesh bounding box: zero height (y = 0), looking
-// horizontally into the mesh from outside its bounding box.
-mesh_view_fit :: proc(mv: ^Mesh_View, m: ^Mesh_Dataset, xi, yi, zi: int) {
-	minp, maxp, ok := mesh_bounds(m, xi, yi, zi)
-	if !ok {
-		return
-	}
+// Fits the camera to a world-space bounding box: zero height (y = 0), looking
+// horizontally at it from outside. Shared by the mesh and 3D quiver views.
+view_fit_bounds :: proc(mv: ^Mesh_View, minp, maxp: [3]f64) {
 	center := rl.Vector3 {
 		f32((minp[0] + maxp[0]) * 0.5),
 		f32((minp[1] + maxp[1]) * 0.5),
@@ -294,9 +340,16 @@ draw_mesh_view :: proc(
 ) {
 	mv := &app.results.mesh_view
 
-	if mv.fit && m != nil {
-		mesh_view_fit(mv, m, xi, yi, zi)
-		mv.fit = false
+	// Bounds for the axis arrows and the one-shot camera fit.
+	minp, maxp, bounds_ok := [3]f64{}, [3]f64{}, false
+	if m != nil {
+		minp, maxp, bounds_ok = mesh_bounds(m, xi, yi, zi)
+		if mv.fit {
+			if bounds_ok {
+				view_fit_bounds(mv, minp, maxp)
+			}
+			mv.fit = false
+		}
 	}
 
 	active := !app.palette.open && !results_any_dropdown_open(&app.results)
@@ -332,6 +385,18 @@ draw_mesh_view :: proc(
 		projection = .PERSPECTIVE,
 	}
 
+	// Axis-direction arrows at the data's min corner, sized to the bbox.
+	axis_origin := rl.Vector3{}
+	axis_len := f32(0)
+	if bounds_ok {
+		axis_origin = rl.Vector3{f32(minp[0]), f32(minp[1]), f32(minp[2])}
+		diag := v3_len(v3_sub(rl.Vector3{f32(maxp[0]), f32(maxp[1]), f32(maxp[2])}, axis_origin))
+		axis_len = diag * 0.2
+		if axis_len <= 0 {
+			axis_len = 1
+		}
+	}
+
 	// Render the 3D scene into an offscreen target sized to the plot rect, then
 	// blit it. This keeps the 3D viewport consistent (raylib derives the camera
 	// aspect from the current framebuffer, which is the render texture here).
@@ -353,6 +418,8 @@ draw_mesh_view :: proc(
 	rl.BeginMode3D(cam)
 
 	rl.DrawGrid(20, 1.0)
+
+	draw_3d_axis_arrows(axis_origin, axis_len)
 
 	// Thin sheets (e.g. the wake) must be visible from both sides, so draw the
 	// mesh with backface culling disabled. The material is built on the fly from
@@ -385,6 +452,11 @@ draw_mesh_view :: proc(
 	// Blit the (vertically flipped) render texture into the plot rect.
 	src := rl.Rectangle{0, 0, f32(mv.rt.texture.width), -f32(mv.rt.texture.height)}
 	rl.DrawTexturePro(mv.rt.texture, src, rect, rl.Vector2{0, 0}, 0, rl.WHITE)
+
+	// Axis labels over the blitted scene.
+	if bounds_ok {
+		draw_3d_axis_labels(cam, axis_origin, axis_len, mv.rt.texture.width, mv.rt.texture.height, rect, sc)
+	}
 
 	// Overlay: wireframe toggle + hint.
 	toggle_w := 76 * sc

@@ -190,6 +190,43 @@ plot_export_histogram_2d :: proc(
 	return false
 }
 
+plot_export_quiver :: proc(
+	app: ^App,
+	X, Y, U, V: []f64,
+	title, x_label, y_label: string,
+	rect: rl.Rectangle,
+	theme: Theme,
+	font_size: i32,
+	sc: f32,
+	scale: f32,
+) -> bool {
+	path := plot_export_path(app, title)
+	rt, ok := plot_export_begin(app, c.int(rect.width), c.int(rect.height))
+	if !ok {return false}
+	defer plot_export_finish(app, rt)
+
+	rl.BeginTextureMode(rt)
+	plot_quiver(
+		app,
+		X, Y, U, V,
+		title,
+		x_label,
+		y_label,
+		rl.Rectangle{0, 0, rect.width, rect.height},
+		theme,
+		font_size,
+		sc,
+		scale,
+	)
+	rl.EndTextureMode()
+
+	if plot_export_write(rt, path) {
+		plot_export_feedback(app, title)
+		return true
+	}
+	return false
+}
+
 plot_export_earth_map :: proc(
 	app: ^App,
 	routes: []PlotRoute,

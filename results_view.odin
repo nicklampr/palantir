@@ -2,8 +2,8 @@ package palantir
 
 // Results explorer view: browse a folder for .csv/.json files, multi-select
 // them, choose one of the available plots (Map / Line / Scatter /
-// Histogram / 2D histogram), and inspect the raw data in a virtualized table
-// that only renders the rows that are actually visible.
+// Histogram / 2D histogram / Mesh / 2D & 3D quiver), and inspect the raw data
+// in a virtualized table that only renders the rows that are actually visible.
 
 import "core:c"
 import "core:fmt"
@@ -28,6 +28,8 @@ PLOT_SCATTER :: 2
 PLOT_HIST :: 3
 PLOT_HIST2D :: 4
 PLOT_MESH3D :: 5
+PLOT_QUIVER :: 6
+PLOT_QUIVER3D :: 7
 
 File_Entry :: struct {
 	name:   string,
@@ -37,20 +39,24 @@ File_Entry :: struct {
 }
 
 Results_Plot :: struct {
-	id:       int, // PLOT_MAP / PLOT_LINE / PLOT_HIST / PLOT_HIST2D
+	id:       int, // PLOT_MAP / PLOT_LINE / PLOT_HIST / PLOT_HIST2D / ...
 	// Column selections (index into the active dataset's columns; -1 = auto).
 	x_col:   int,
 	y_col:   int,
 	z_col:   int,
 	h_col:   int,
+	u_col:   int, // 2D / 3D quiver vector component
+	v_col:   int, // 2D / 3D quiver vector component
+	w_col:   int, // 3D quiver vector component
 	lat_col: int,
 	lon_col: int,
 	// Dropdown popup state.
-	x_open, y_open, z_open, h_open, lat_open, lon_open: bool,
+	x_open, y_open, z_open, h_open, u_open, v_open, w_open, lat_open, lon_open: bool,
 	// Per-dropdown popup scroll offset (index into the column list).
-	x_scroll, y_scroll, z_scroll, h_scroll, lat_scroll, lon_scroll: int,
+	x_scroll, y_scroll, z_scroll, h_scroll, u_scroll, v_scroll, w_scroll, lat_scroll, lon_scroll: int,
 	// Plot-selector dropdown popup state.
 	plot_open: bool,
+	prev_id: int, // plot id of the previous frame (for one-shot camera fits)
 	bins: int, // histogram bin count (0 = auto)
 }
 
@@ -98,6 +104,10 @@ Results_State :: struct {
 	mesh_view:     Mesh_View,
 	mesh_render:   Mesh_Render_Cache,
 	mesh_shader:   rl.Shader,
+	// 3D quiver fly camera / offscreen target (same Mesh_View machinery).
+	quiver_view:   Mesh_View,
+	// Arrow-size multiplier for the 2D / 3D quiver widgets (see quiver.odin).
+	quiver_scale:  f32,
 }
 
 // --- state lifecycle ---------------------------------------------------------
@@ -112,6 +122,9 @@ results_init :: proc(app: ^App) {
 		y_col = -1,
 		z_col = -1,
 		h_col = -1,
+		u_col = -1,
+		v_col = -1,
+		w_col = -1,
 		lat_col = -1,
 		lon_col = -1,
 	}
@@ -119,6 +132,8 @@ results_init :: proc(app: ^App) {
 	rs.show_left_panel = true
 	rs.show_bottom_panel = true
 	rs.mesh_view = mesh_view_init()
+	rs.quiver_view = mesh_view_init()
+	rs.quiver_scale = 1.0
 }
 
 results_destroy :: proc(app: ^App) {
@@ -151,6 +166,7 @@ results_destroy :: proc(app: ^App) {
 	destroy_map_background(&rs.map_bg)
 	results_destroy_mesh(app)
 	mesh_view_unload(&rs.mesh_view)
+	mesh_view_unload(&rs.quiver_view)
 	if rs.mesh_shader.id != 0 {
 		rl.UnloadShader(rs.mesh_shader)
 		rs.mesh_shader = {}
@@ -728,7 +744,7 @@ results_refresh :: proc(app: ^App) {
 
 // Global keyboard shortcuts for the results explorer (ignored while the
 // command palette is open). Ctrl+F focuses search, Ctrl+R refreshes,
-// Ctrl+L/Ctrl+B toggle the left/bottom panels, and Ctrl+1..5 switch
+// Ctrl+L/Ctrl+B toggle the left/bottom panels, and Ctrl+1..8 switch
 // the active plot type.
 results_handle_shortcuts :: proc(app: ^App) {
 	if app.palette.open {
@@ -758,6 +774,8 @@ results_handle_shortcuts :: proc(app: ^App) {
 		if rl.IsKeyPressed(.FOUR) {rs.plot.id = PLOT_HIST}
 		if rl.IsKeyPressed(.FIVE) {rs.plot.id = PLOT_HIST2D}
 		if rl.IsKeyPressed(.SIX) {rs.plot.id = PLOT_MESH3D}
+		if rl.IsKeyPressed(.SEVEN) {rs.plot.id = PLOT_QUIVER}
+		if rl.IsKeyPressed(.EIGHT) {rs.plot.id = PLOT_QUIVER3D}
 	}
 }
 
@@ -1253,7 +1271,7 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 
 // --- plot panel --------------------------------------------------------------
 
-PLOT_NAMES := [?]string{"Map", "Line", "Scatter", "Histogram", "2D", "Mesh"}
+PLOT_NAMES := [?]string{"Map", "Line", "Scatter", "Histogram", "2D", "Mesh", "Quiver", "3D Quiver"}
 
 draw_plot_selector :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32) {
 	rs := &app.results
@@ -1309,14 +1327,20 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 	inner := rl.Rectangle{panel.x + inset, panel.y + inset, panel.width - 2 * inset, panel.height - 2 * inset}
 
 	tab_h := 32 * sc
+	row_gap := 8 * sc
 	cfg_h := 34 * sc
-	cfg_rect := rl.Rectangle{inner.x, inner.y + tab_h + 8 * sc, inner.width, cfg_h}
+	cfg_rows := 1
+	if rs.plot.id == PLOT_QUIVER3D {
+		cfg_rows = 2
+	}
+	cfg_total := cfg_h * f32(cfg_rows) + row_gap * f32(cfg_rows - 1)
+	cfg_rect := rl.Rectangle{inner.x, inner.y + tab_h + 8 * sc, inner.width, cfg_total}
 
 	plot_rect := rl.Rectangle {
 		inner.x,
-		inner.y + tab_h + cfg_h + 16 * sc,
+		inner.y + tab_h + cfg_total + 16 * sc,
 		inner.width,
-		inner.height - tab_h - cfg_h - 16 * sc,
+		inner.height - tab_h - cfg_total - 16 * sc,
 	}
 
 	fs := i32(12 * sc)
@@ -1423,8 +1447,59 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 					}
 				}
 			}
+
+		case PLOT_QUIVER:
+			ds := active_dataset(rs)
+			if ds == nil {
+				draw_empty_plot(plot_rect, "Select a data file to plot", t, sc)
+			} else {
+				x_name := results_col_name(app, rs.plot.x_col)
+				y_name := results_col_name(app, rs.plot.y_col)
+				u_name := results_col_name(app, rs.plot.u_col)
+				v_name := results_col_name(app, rs.plot.v_col)
+				if x_name == "" || y_name == "" || u_name == "" || v_name == "" {
+					draw_empty_plot(plot_rect, "Pick X, Y, U and V columns", t, sc)
+				} else {
+					xs, ys, us, vs := build_quiver_2d(app, x_name, y_name, u_name, v_name)
+					if len(xs) == 0 {
+						draw_empty_plot(plot_rect, "No data", t, sc)
+					} else {
+						plot_quiver(app, xs, ys, us, vs, "Quiver plot", x_name, y_name, plot_rect, t, fs, sc, rs.quiver_scale, &rs.quiver_scale)
+					}
+				}
+			}
+
+		case PLOT_QUIVER3D:
+			ds := active_dataset(rs)
+			if ds == nil {
+				draw_empty_plot(plot_rect, "Select a data file to plot", t, sc)
+			} else {
+				x_name := results_col_name(app, rs.plot.x_col)
+				y_name := results_col_name(app, rs.plot.y_col)
+				z_name := results_col_name(app, rs.plot.z_col)
+				u_name := results_col_name(app, rs.plot.u_col)
+				v_name := results_col_name(app, rs.plot.v_col)
+				w_name := results_col_name(app, rs.plot.w_col)
+				if x_name == "" || y_name == "" || z_name == "" || u_name == "" || v_name == "" || w_name == "" {
+					draw_empty_plot(plot_rect, "Pick X, Y, Z, U, V and W columns", t, sc)
+				} else {
+					xs, ys, zs, us, vs, ws := build_quiver_3d(app, x_name, y_name, z_name, u_name, v_name, w_name)
+					if len(xs) == 0 {
+						draw_empty_plot(plot_rect, "No data", t, sc)
+					} else {
+						// Refit the fly camera only when entering this plot type,
+						// so the user's camera stays put while panning around.
+						if rs.plot.prev_id != PLOT_QUIVER3D {
+							rs.quiver_view.fit = true
+						}
+						draw_quiver_view(app, xs, ys, zs, us, vs, ws, &rs.quiver_scale, "3D quiver", plot_rect, t, sc)
+					}
+				}
+			}
 	}
 	}
+
+	rs.plot.prev_id = rs.plot.id
 
 	// Column config is drawn before the plot selector, so when the selector's
 	// dropdown is open its opaque popup paints cleanly over the config row
@@ -1499,6 +1574,13 @@ draw_plot_config :: proc(app: ^App, rect: rl.Rectangle) {
 		draw_dropdown_row(app, rect, {"X", "Y"}, {&rs.plot.x_col, &rs.plot.y_col}, {&rs.plot.x_open, &rs.plot.y_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll}, names, t, sc)
 	case PLOT_MESH3D:
 		draw_dropdown_row(app, rect, {"X", "Y", "Z", "Color"}, {&rs.plot.x_col, &rs.plot.y_col, &rs.plot.z_col, &rs.plot.h_col}, {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.z_open, &rs.plot.h_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.z_scroll, &rs.plot.h_scroll}, names, t, sc)
+	case PLOT_QUIVER:
+		draw_dropdown_row(app, rect, {"X", "Y", "U", "V"}, {&rs.plot.x_col, &rs.plot.y_col, &rs.plot.u_col, &rs.plot.v_col}, {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.u_open, &rs.plot.v_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.u_scroll, &rs.plot.v_scroll}, names, t, sc)
+	case PLOT_QUIVER3D:
+		// Positions on the first row, vector components on the second.
+		row2 := rl.Rectangle{rect.x, rect.y + 34 * sc + 8 * sc, rect.width, 34 * sc}
+		draw_dropdown_row(app, rect, {"X", "Y", "Z"}, {&rs.plot.x_col, &rs.plot.y_col, &rs.plot.z_col}, {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.z_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.z_scroll}, names, t, sc)
+		draw_dropdown_row(app, row2, {"U", "V", "W"}, {&rs.plot.u_col, &rs.plot.v_col, &rs.plot.w_col}, {&rs.plot.u_open, &rs.plot.v_open, &rs.plot.w_open}, {&rs.plot.u_scroll, &rs.plot.v_scroll, &rs.plot.w_scroll}, names, t, sc)
 	}
 }
 
@@ -1755,7 +1837,11 @@ draw_dropdown :: proc(
 // guarantee only one popup is ever open, so the plot selector's dropdown never
 // overlaps the column-config popups.
 results_close_column_popups :: proc(rs: ^Results_State, keep: ^bool = nil) {
-	popups := [?]^bool {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.z_open, &rs.plot.h_open, &rs.plot.lat_open, &rs.plot.lon_open}
+	popups := [?]^bool {
+		&rs.plot.x_open, &rs.plot.y_open, &rs.plot.z_open, &rs.plot.h_open,
+		&rs.plot.u_open, &rs.plot.v_open, &rs.plot.w_open,
+		&rs.plot.lat_open, &rs.plot.lon_open,
+	}
 	for p in popups {
 		if p != keep {
 			p^ = false
@@ -1764,7 +1850,16 @@ results_close_column_popups :: proc(rs: ^Results_State, keep: ^bool = nil) {
 }
 
 results_any_dropdown_open :: proc(rs: ^Results_State) -> bool {
-	return rs.plot.x_open || rs.plot.y_open || rs.plot.z_open || rs.plot.h_open || rs.plot.lat_open || rs.plot.lon_open || rs.plot.plot_open
+	return rs.plot.x_open ||
+	       rs.plot.y_open ||
+	       rs.plot.z_open ||
+	       rs.plot.h_open ||
+	       rs.plot.u_open ||
+	       rs.plot.v_open ||
+	       rs.plot.w_open ||
+	       rs.plot.lat_open ||
+	       rs.plot.lon_open ||
+	       rs.plot.plot_open
 }
 
 build_map_routes :: proc(app: ^App) -> []PlotRoute {
@@ -1836,6 +1931,41 @@ build_line_series :: proc(app: ^App, x_name, y_name: string, hue_name := "") -> 
 		append(&series, ps)
 	}
 	return series[:]
+}
+
+// Index-paired component slices for the 2D quiver, stride-sampled from the
+// active dataset. The four columns are sampled independently — no meshgrid is
+// assumed — and paired by index in the quiver widget.
+build_quiver_2d :: proc(
+	app: ^App,
+	x_name, y_name, u_name, v_name: string,
+) -> ([]f64, []f64, []f64, []f64) {
+	ds := active_dataset(&app.results)
+	if ds == nil {
+		return nil, nil, nil, nil
+	}
+	return ds_quiver_vals(ds, ds_column(ds, x_name), MAX_PLOT_POINTS),
+	       ds_quiver_vals(ds, ds_column(ds, y_name), MAX_PLOT_POINTS),
+	       ds_quiver_vals(ds, ds_column(ds, u_name), MAX_PLOT_POINTS),
+	       ds_quiver_vals(ds, ds_column(ds, v_name), MAX_PLOT_POINTS)
+}
+
+// Index-paired component slices for the 3D quiver, stride-sampled from the
+// active dataset (same independent-sampling rule as build_quiver_2d).
+build_quiver_3d :: proc(
+	app: ^App,
+	x_name, y_name, z_name, u_name, v_name, w_name: string,
+) -> ([]f64, []f64, []f64, []f64, []f64, []f64) {
+	ds := active_dataset(&app.results)
+	if ds == nil {
+		return nil, nil, nil, nil, nil, nil
+	}
+	return ds_quiver_vals(ds, ds_column(ds, x_name), MAX_PLOT_POINTS),
+	       ds_quiver_vals(ds, ds_column(ds, y_name), MAX_PLOT_POINTS),
+	       ds_quiver_vals(ds, ds_column(ds, z_name), MAX_PLOT_POINTS),
+	       ds_quiver_vals(ds, ds_column(ds, u_name), MAX_PLOT_POINTS),
+	       ds_quiver_vals(ds, ds_column(ds, v_name), MAX_PLOT_POINTS),
+	       ds_quiver_vals(ds, ds_column(ds, w_name), MAX_PLOT_POINTS)
 }
 
 // --- raw data table ----------------------------------------------------------

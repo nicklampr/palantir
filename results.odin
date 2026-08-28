@@ -722,3 +722,25 @@ ds_series_hue :: proc(ds: ^Dataset, col: ^Column, max_points: int) -> []f64 {
 	}
 	return out
 }
+
+// Stride-sampled numeric values for a quiver component column. Columns are
+// sampled independently (same stride rule as the other series builders); the
+// quiver widgets then pair them index-wise, so the columns never need to form
+// a meshgrid and may even differ in length.
+ds_quiver_vals :: proc(ds: ^Dataset, col: ^Column, max_points: int) -> []f64 {
+	if ds == nil || col == nil {
+		return nil
+	}
+	vals := ds_values(col)
+	n := min(len(vals), ds.n_rows)
+	if n == 0 {
+		return nil
+	}
+	stride := (n + max_points - 1) / max_points if n > max_points else 1
+	count := (n + stride - 1) / stride
+	out := make([]f64, count, context.temp_allocator)
+	for i := 0; i < n; i += stride {
+		out[i / stride] = vals[i]
+	}
+	return out
+}
