@@ -356,6 +356,14 @@ load_json_dataset :: proc(path, display_name: string) -> (^Dataset, bool) {
 	defer delete(data)
 
 	val, perr := json.parse(data)
+	if perr == .Duplicate_Object_Key {
+		// Some producers double-serialize rows, emitting the same keys twice in
+		// every object. json.parse rejects that; strip the repeats and retry.
+		json.destroy_value(val)
+		cleaned := json_strip_duplicate_keys(data)
+		defer delete(cleaned)
+		val, perr = json.parse(cleaned)
+	}
 	if perr != nil {
 		return nil, false
 	}
@@ -517,6 +525,193 @@ json_aos_into_dataset :: proc(ds: ^Dataset, arr: json.Array) -> bool {
 		finalize_column(col, all_num, all_bool)
 	}
 	return true
+}
+
+// --- duplicate-key stripping ------------------------------------------------
+//
+// Some producers double-serialize rows so every object carries the same keys
+// twice (identical values). core:encoding/json rejects that with
+// .Duplicate_Object_Key, so before parsing we strip the repeats. The scanner
+// is a single pass over the raw bytes: it keeps the first occurrence of each
+// key per object and drops the repeated "key":value pair plus its trailing
+// separator comma, at every nesting level.
+
+json_strip_duplicate_keys :: proc(data: []byte) -> string {
+	out := make([dynamic]byte, 0, len(data), context.allocator)
+	defer delete(out)
+	i := 0
+	json_clean_value(data, &out, &i)
+	// string(out[:]) would alias the dynamic buffer (Odin converts []byte ->
+	// string without copying), so clone into an owned allocation.
+	return strings.clone(string(out[:]))
+}
+
+// Appends a JSON-valid cleaned copy of the value starting at data[i] and
+// returns the index just past it. Whitespace is normalized away, which is fine.
+json_clean_value :: proc(data: []byte, out: ^[dynamic]byte, i: ^int) {
+	if i^ >= len(data) {
+		return
+	}
+	skip_json_ws(data, i)
+	switch data[i^] {
+	case '{':
+		json_clean_object(data, out, i)
+	case '[':
+		json_clean_array(data, out, i)
+	case:
+		end := json_skip_value(data, i^)
+		append(out, ..data[i^:end])
+		i^ = end
+	}
+}
+
+json_clean_object :: proc(data: []byte, out: ^[dynamic]byte, i: ^int) {
+	append(out, '{')
+	i^ += 1
+	seen := make(map[string]bool, context.temp_allocator)
+	first := true
+	for {
+		skip_json_ws(data, i)
+		if i^ >= len(data) || data[i^] == '}' {
+			break
+		}
+		key, after_key := json_read_key(data, i^)
+		colon := after_key
+		for colon < len(data) && data[colon] != ':' {
+			colon += 1
+		}
+		val_start := colon + 1
+		val_end := json_skip_value(data, val_start)
+		if seen[key] {
+			// Duplicate: drop this pair entirely; the separator comma after it
+			// is consumed by the shared trailing step below.
+			i^ = val_end
+		} else {
+			seen[key] = true
+			if !first {
+				append(out, ',')
+			}
+			first = false
+			append(out, ..data[i^:val_start])
+			json_clean_value(data, out, &val_start)
+			i^ = val_start
+		}
+		skip_json_ws(data, i)
+		if i^ < len(data) && data[i^] == ',' {
+			i^ += 1
+		}
+	}
+	if i^ < len(data) {
+		append(out, '}')
+		i^ += 1
+	}
+}
+
+json_clean_array :: proc(data: []byte, out: ^[dynamic]byte, i: ^int) {
+	append(out, '[')
+	i^ += 1
+	first := true
+	for {
+		skip_json_ws(data, i)
+		if i^ >= len(data) || data[i^] == ']' {
+			break
+		}
+		if !first {
+			append(out, ',')
+		}
+		first = false
+		json_clean_value(data, out, i)
+		skip_json_ws(data, i)
+		if i^ < len(data) && data[i^] == ',' {
+			i^ += 1
+		}
+	}
+	if i^ < len(data) {
+		append(out, ']')
+		i^ += 1
+	}
+}
+
+// data[i] points at the opening quote of an object key; returns the key text
+// (without quotes) and the index just past the closing quote.
+json_read_key :: proc(data: []byte, i: int) -> (string, int) {
+	end := json_string_end(data, i)
+	return string(data[i + 1:end - 1]), end
+}
+
+skip_json_ws :: proc(data: []byte, i: ^int) {
+	for i^ < len(data) && (data[i^] == ' ' || data[i^] == '\t' || data[i^] == '\n' || data[i^] == '\r') {
+		i^ += 1
+	}
+}
+
+// Returns the index just past the string literal whose opening quote is at
+// data[i], honoring backslash escapes.
+json_string_end :: proc(data: []byte, i: int) -> int {
+	j := i + 1
+	for j < len(data) {
+		if data[j] == '\\' {
+			j += 2
+		} else if data[j] == '"' {
+			return j + 1
+		} else {
+			j += 1
+		}
+	}
+	return j
+}
+
+// Returns the index just past the complete JSON value starting at data[i]:
+// a balanced object/array (skipping nested strings) or a bare scalar token.
+json_skip_value :: proc(data: []byte, i: int) -> int {
+	switch data[i] {
+	case '"':
+		return json_string_end(data, i)
+	case '{':
+		depth := 1
+		j := i + 1
+		for j < len(data) && depth > 0 {
+			if data[j] == '"' {
+				j = json_string_end(data, j)
+			} else if data[j] == '{' {
+				depth += 1
+				j += 1
+			} else if data[j] == '}' {
+				depth -= 1
+				j += 1
+			} else {
+				j += 1
+			}
+		}
+		return j
+	case '[':
+		depth := 1
+		j := i + 1
+		for j < len(data) && depth > 0 {
+			if data[j] == '"' {
+				j = json_string_end(data, j)
+			} else if data[j] == '[' {
+				depth += 1
+				j += 1
+			} else if data[j] == ']' {
+				depth -= 1
+				j += 1
+			} else {
+				j += 1
+			}
+		}
+		return j
+	case:
+		j := i
+		for j < len(data) {
+			c := data[j]
+			if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ',' || c == '}' || c == ']' {
+				break
+			}
+			j += 1
+		}
+		return j
+	}
 }
 
 json_array_is_scalar :: proc(v: json.Value) -> bool {

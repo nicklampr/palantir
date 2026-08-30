@@ -139,6 +139,71 @@ test_load_json_nested_aos :: proc(t: ^testing.T) {
 	}
 }
 
+// Some producers double-serialize rows, emitting the same keys twice in every
+// object (identical values). json.parse rejects that, so load_json_dataset must
+// strip the repeats and load the array-of-structs anyway.
+@(test)
+test_load_json_aos_duplicate_keys :: proc(t: ^testing.T) {
+	tmp := fmt_tmp_path("dupkeys")
+	defer os.remove(tmp)
+
+	content := `[{"timestamp":"2025-06-03T19:25:08","latitude":28.237984,"longitude":-89.075165,"route_id":null,"longitude":-89.075165,"latitude":28.237984,"timestamp":"2025-06-03T19:25:08","hs":0.8240368,"missing_wave":false},{"timestamp":"2025-06-03T19:40:17","latitude":28.19939,"longitude":-89.05139,"route_id":null,"longitude":-89.05139,"latitude":28.19939,"timestamp":"2025-06-03T19:40:17","hs":0.8099722,"missing_wave":false}]`
+	err := os.write_entire_file_from_string(tmp, content)
+	testing.expect(t, err == nil, "failed to write tmp json")
+	if err != nil {return}
+
+	ds, ok := load_json_dataset(tmp, "dup")
+	testing.expect(t, ok, "failed to load AoS json with duplicate keys")
+	if !ok {return}
+	defer free(ds)
+	defer dataset_destroy(ds)
+
+	testing.expect(t, ds.n_rows == 2, "expected 2 rows")
+	testing.expect(t, len(ds.columns) == 6, "expected 6 unique columns")
+
+	latitude := ds_column(ds, "latitude")
+	testing.expect(t, latitude != nil && latitude.type == .Float, "latitude should be Float")
+	if latitude != nil {
+		testing.expect(t, abs_f64(latitude.floats[0] - 28.237984) < 1e-6, "latitude[0] mismatch")
+	}
+	longitude := ds_column(ds, "longitude")
+	testing.expect(t, longitude != nil && longitude.type == .Float, "longitude should be Float")
+	if longitude != nil {
+		testing.expect(t, abs_f64(longitude.floats[1] - -89.05139) < 1e-6, "longitude[1] mismatch")
+	}
+	ts := ds_column(ds, "timestamp")
+	testing.expect(t, ts != nil && ts.type == .Str, "timestamp should be Str")
+}
+
+// The duplicate-key sanitizer must drop repeats at every nesting level and leave
+// output that json.parse accepts.
+@(test)
+test_strip_duplicate_keys :: proc(t: ^testing.T) {
+	input := `{"a":1,"a":2,"b":{"x":1,"x":2},"c":[1,2],"a":3}`
+	cleaned := json_strip_duplicate_keys(transmute([]byte)input)
+	defer delete(cleaned)
+
+	val, perr := json.parse(transmute([]byte)cleaned)
+	testing.expect(t, perr == nil, "cleaned json must parse")
+	if perr != nil {return}
+	defer json.destroy_value(val)
+
+	obj, ok := val.(json.Object)
+	testing.expect(t, ok, "expected object")
+	if !ok {return}
+	testing.expect(t, len(obj) == 3, "expected 3 unique keys")
+
+	// json.parse turns every number into a Float unless parse_integers is set.
+	a, aok := obj["a"].(json.Float)
+	testing.expect(t, aok && a == 1.0, "kept first a value")
+	b, bok := obj["b"].(json.Object)
+	testing.expect(t, bok && len(b) == 1, "nested duplicate stripped")
+	if bok {
+		x, xok := b["x"].(json.Float)
+		testing.expect(t, xok && x == 1.0, "nested kept first value")
+	}
+}
+
 @(test)
 test_lat_lon_detection :: proc(t: ^testing.T) {
 	path := YGG_RESULTS_DIR + "/belgium_to_south_africa.csv"
