@@ -1260,6 +1260,10 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 		}
 	}
 
+	// Snapshot before ui_scroll_begin: it clears `dragging` on the same release
+	// frame, so we need the pre-release value to tell a scrollbar drag apart
+	// from a plain row click.
+	was_scroll_drag := rs.file_scroll.dragging
 	rl.BeginScissorMode(
 		c.int(viewport.x),
 		c.int(viewport.y),
@@ -1291,10 +1295,12 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 	ui_scroll_end(&u, &rs.file_scroll, viewport, t, sc)
 
 	// Row interaction. Clicks on the scrollbar track are ignored so scrolling
-	// never accidentally selects the file under the cursor.
+	// never accidentally selects the file under the cursor; releases that end a
+	// scrollbar thumb/track drag are likewise ignored wherever the cursor ends up.
 	mouse := rl.GetMousePosition()
 	track := scroll_track(viewport, sc)
 	if !app.palette.open &&
+	   !was_scroll_drag &&
 	   rl.IsMouseButtonReleased(.LEFT) &&
 	   rl.CheckCollisionPointRec(mouse, viewport) &&
 	   !rl.CheckCollisionPointRec(mouse, track) {
@@ -1394,6 +1400,8 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 	}
 
 	viewport := rl.Rectangle{panel.x, panel.y + title_h + 36 * sc, panel.width, panel.height - title_h - 36 * sc}
+	// Snapshot before ui_scroll_begin clears `dragging` on the release frame.
+	was_scroll_drag := rs.dir_scroll.dragging
 	rl.BeginScissorMode(
 		c.int(viewport.x),
 		c.int(viewport.y),
@@ -1426,6 +1434,7 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 	mouse := rl.GetMousePosition()
 	track := scroll_track(viewport, sc)
 	if !app.palette.open &&
+	   !was_scroll_drag &&
 	   rl.IsMouseButtonReleased(.LEFT) &&
 	   rl.CheckCollisionPointRec(mouse, viewport) &&
 	   !rl.CheckCollisionPointRec(mouse, track) {
