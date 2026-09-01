@@ -40,25 +40,41 @@ File_Entry :: struct {
 }
 
 Results_Plot :: struct {
-	id:       int, // PLOT_MAP / PLOT_LINE / PLOT_HIST / PLOT_HIST2D / ...
+	id:                                                                                           int, // PLOT_MAP / PLOT_LINE / PLOT_HIST / PLOT_HIST2D / ...
 	// Column selections (index into the active dataset's columns; -1 = auto).
-	x_col:   int,
-	y_col:   int,
-	z_col:   int,
-	h_col:   int,
-	u_col:   int, // 2D / 3D quiver vector component
-	v_col:   int, // 2D / 3D quiver vector component
-	w_col:   int, // 3D quiver vector component
-	lat_col: int,
-	lon_col: int,
+	x_col:                                                                                        int,
+	y_col:                                                                                        int,
+	z_col:                                                                                        int,
+	h_col:                                                                                        int,
+	u_col:                                                                                        int, // 2D / 3D quiver vector component
+	v_col:                                                                                        int, // 2D / 3D quiver vector component
+	w_col:                                                                                        int, // 3D quiver vector component
+	lat_col:                                                                                      int,
+	lon_col:                                                                                      int,
 	// Dropdown popup state.
-	x_open, y_open, z_open, h_open, u_open, v_open, w_open, lat_open, lon_open: bool,
+	x_open,
+	y_open,
+	z_open,
+	h_open,
+	u_open,
+	v_open,
+	w_open,
+	lat_open,
+	lon_open:                   bool,
 	// Per-dropdown popup scroll offset (index into the column list).
-	x_scroll, y_scroll, z_scroll, h_scroll, u_scroll, v_scroll, w_scroll, lat_scroll, lon_scroll: int,
+	x_scroll,
+	y_scroll,
+	z_scroll,
+	h_scroll,
+	u_scroll,
+	v_scroll,
+	w_scroll,
+	lat_scroll,
+	lon_scroll: int,
 	// Plot-selector dropdown popup state.
-	plot_open: bool,
-	prev_id: int, // plot id of the previous frame (for one-shot camera fits)
-	bins: int, // histogram bin count (0 = auto)
+	plot_open:                                                                                    bool,
+	prev_id:                                                                                      int, // plot id of the previous frame (for one-shot camera fits)
+	bins:                                                                                         int, // histogram bin count (0 = auto)
 }
 
 // The nine column-selection slots, keyed by name rather than index. This is
@@ -73,57 +89,57 @@ Plot_Columns :: struct {
 }
 
 Results_State :: struct {
-	root:          string,
-	entries:       []File_Entry,
-	dir_scroll:    Scroll_State,
-	file_scroll:   Scroll_State,
-	path_buf:      [512]u8,
-	path_len:      int,
-	path_edit:     bool,
-	selected:      [dynamic]int,
-	file_cursor:   int, // keyboard cursor into the file list (0 = ".." row when present)
-	datasets:      [dynamic]^Dataset,
-	active_ds:     int,
-	raw_scroll:    Scroll_State,
-	raw_col_scroll: f32,
+	root:              string,
+	entries:           []File_Entry,
+	dir_scroll:        Scroll_State,
+	file_scroll:       Scroll_State,
+	path_buf:          [512]u8,
+	path_len:          int,
+	path_edit:         bool,
+	selected:          [dynamic]int,
+	file_cursor:       int, // keyboard cursor into the file list (0 = ".." row when present)
+	datasets:          [dynamic]^Dataset,
+	active_ds:         int,
+	raw_scroll:        Scroll_State,
+	raw_col_scroll:    f32,
 	// Horizontal raw-table scrollbar drag state.
-	raw_col_dragging: bool,
-	raw_col_grab_off: f32,
-	raw_widths:    [dynamic]f32,
+	raw_col_dragging:  bool,
+	raw_col_grab_off:  f32,
+	raw_widths:        [dynamic]f32,
 	// Shared filter box for the column dropdowns (only one popup ever open).
-	col_filter:    [64]u8,
-	col_filter_len: int,
+	col_filter:        [64]u8,
+	col_filter_len:    int,
 	// Command-palette folder navigation: parent + subdirectories of `root`,
 	// rebuilt whenever the folder is rescanned. Owns the name/path strings.
-	folder_cmds:   [dynamic]Palette_Command,
-	show_left_panel: bool,
+	folder_cmds:       [dynamic]Palette_Command,
+	show_left_panel:   bool,
 	show_bottom_panel: bool,
-	show_recents:  bool,
-	search_buf:    [256]u8,
-	search_len:    int,
-	search_edit:   bool,
+	show_recents:      bool,
+	search_buf:        [256]u8,
+	search_len:        int,
+	search_edit:       bool,
 	// True for the frame a text input consumed Enter, so the file-browser
 	// keyboard navigation can't also act on that same keypress.
-	text_enter:    bool,
-	plot:          Results_Plot,
-	map_view:      Map_View,
-	map_bg:        Map_Background,
-	map_bg_init:   bool,
-	msg:           string,
+	text_enter:        bool,
+	plot:              Results_Plot,
+	map_view:          Map_View,
+	map_bg:            Map_Background,
+	map_bg_init:       bool,
+	msg:               string,
 	// 3D mesh viewer state (see mesh.odin / mesh_view.odin).
-	mesh:          ^Mesh_Dataset,
-	mesh_path:     string, // path the cached mesh was loaded from
-	mesh_view:     Mesh_View,
-	mesh_render:   Mesh_Render_Cache,
-	mesh_shader:   rl.Shader,
+	mesh:              ^Mesh_Dataset,
+	mesh_path:         string, // path the cached mesh was loaded from
+	mesh_view:         Mesh_View,
+	mesh_render:       Mesh_Render_Cache,
+	mesh_shader:       rl.Shader,
 	// 3D quiver fly camera / offscreen target (same Mesh_View machinery).
-	quiver_view:   Mesh_View,
+	quiver_view:       Mesh_View,
 	// Arrow-size multiplier for the 2D / 3D quiver widgets (see quiver.odin).
-	quiver_scale:  f32,
+	quiver_scale:      f32,
 	// Remembered column names (persisted in settings); applied to the plot
 	// indices whenever a new dataset becomes active.
-	remembered:    Plot_Columns,
-	applied_to_ds: rawptr, // dataset the remembered names were last applied to
+	remembered:        Plot_Columns,
+	applied_to_ds:     rawptr, // dataset the remembered names were last applied to
 	// Next frame time (rl.GetTime) at which to poll file mtimes for changes.
 	auto_refresh_next: f64,
 }
@@ -135,18 +151,22 @@ results_init :: proc(app: ^App) {
 	rs.active_ds = -1
 	rs.file_cursor = 0
 	rs.plot = Results_Plot {
-		id = PLOT_MAP,
-		x_col = -1,
-		y_col = -1,
-		z_col = -1,
-		h_col = -1,
-		u_col = -1,
-		v_col = -1,
-		w_col = -1,
+		id      = PLOT_MAP,
+		x_col   = -1,
+		y_col   = -1,
+		z_col   = -1,
+		h_col   = -1,
+		u_col   = -1,
+		v_col   = -1,
+		w_col   = -1,
 		lat_col = -1,
 		lon_col = -1,
 	}
-	rs.map_view = Map_View{center_lon = 0, center_lat = 25, lon_span = 360}
+	rs.map_view = Map_View {
+		center_lon = 0,
+		center_lat = 25,
+		lon_span   = 360,
+	}
 	rs.show_left_panel = true
 	rs.show_bottom_panel = true
 	rs.mesh_view = mesh_view_init()
@@ -244,20 +264,26 @@ results_scan :: proc(app: ^App) {
 			continue
 		}
 		if info.type == .Directory {
-			append(&entries, File_Entry {
-				name = strings.clone(info.name),
-				path = strings.clone(info.fullpath),
-				is_dir = true,
-			})
+			append(
+				&entries,
+				File_Entry {
+					name = strings.clone(info.name),
+					path = strings.clone(info.fullpath),
+					is_dir = true,
+				},
+			)
 		} else {
 			ext := file_extension(info.name)
 			if ext == ".csv" || ext == ".json" {
-				append(&entries, File_Entry {
-					name = strings.clone(info.name),
-					path = strings.clone(info.fullpath),
-					is_dir = false,
-					size = info.size,
-				})
+				append(
+					&entries,
+					File_Entry {
+						name = strings.clone(info.name),
+						path = strings.clone(info.fullpath),
+						is_dir = false,
+						size = info.size,
+					},
+				)
 			}
 		}
 	}
@@ -291,21 +317,27 @@ refresh_palette_folders :: proc(app: ^App) {
 
 	parent := filepath.dir(rs.root)
 	if parent != rs.root {
-		append(&rs.folder_cmds, Palette_Command {
-			name        = strings.clone(".."),
-			description = strings.clone(parent),
-			user_data   = rawptr(uintptr(FOLDER_CMD_BASE)),
-		})
+		append(
+			&rs.folder_cmds,
+			Palette_Command {
+				name = strings.clone(".."),
+				description = strings.clone(parent),
+				user_data = rawptr(uintptr(FOLDER_CMD_BASE)),
+			},
+		)
 	}
 	for e in rs.entries {
 		if !e.is_dir {
 			continue
 		}
-		append(&rs.folder_cmds, Palette_Command {
-			name        = strings.clone(e.name),
-			description = strings.clone(e.path),
-			user_data   = rawptr(uintptr(FOLDER_CMD_BASE + len(rs.folder_cmds))),
-		})
+		append(
+			&rs.folder_cmds,
+			Palette_Command {
+				name = strings.clone(e.name),
+				description = strings.clone(e.path),
+				user_data = rawptr(uintptr(FOLDER_CMD_BASE + len(rs.folder_cmds))),
+			},
+		)
 	}
 }
 
@@ -323,11 +355,14 @@ open_folder_palette :: proc(app: ^App) {
 	}
 	clear(&app.palette_folder_children)
 	for fc in app.results.folder_cmds {
-		append(&app.palette_folder_children, Palette_Command {
-			name        = strings.clone(fc.name),
-			description = strings.clone(fc.description),
-			user_data   = fc.user_data,
-		})
+		append(
+			&app.palette_folder_children,
+			Palette_Command {
+				name = strings.clone(fc.name),
+				description = strings.clone(fc.description),
+				user_data = fc.user_data,
+			},
+		)
 	}
 	palette_open_it(&app.palette)
 	if len(app.palette_folder_children) > 0 {
@@ -948,11 +983,14 @@ refresh_palette_recents :: proc(app: ^App) {
 	}
 	clear(&app.palette_recent_children)
 	for p, i in app.recents {
-		append(&app.palette_recent_children, Palette_Command {
-			name = strings.clone(file_base_name(p)),
-			description = strings.clone(p),
-			user_data = rawptr(uintptr(RECENT_CMD_BASE + i)),
-		})
+		append(
+			&app.palette_recent_children,
+			Palette_Command {
+				name = strings.clone(file_base_name(p)),
+				description = strings.clone(p),
+				user_data = rawptr(uintptr(RECENT_CMD_BASE + i)),
+			},
+		)
 	}
 	clear(&app.palette_root)
 	for cmd in gui_commands {
@@ -1036,8 +1074,18 @@ draw_results_view :: proc(app: ^App) {
 	refresh_rect := rl.Rectangle{sw - pad - btn_w, top, btn_w, bar_h}
 	bottom_toggle_w := 96 * sc
 	left_toggle_w := 82 * sc
-	bottom_toggle_rect := rl.Rectangle{refresh_rect.x - gap - bottom_toggle_w, top, bottom_toggle_w, bar_h}
-	left_toggle_rect := rl.Rectangle{bottom_toggle_rect.x - gap - left_toggle_w, top, left_toggle_w, bar_h}
+	bottom_toggle_rect := rl.Rectangle {
+		refresh_rect.x - gap - bottom_toggle_w,
+		top,
+		bottom_toggle_w,
+		bar_h,
+	}
+	left_toggle_rect := rl.Rectangle {
+		bottom_toggle_rect.x - gap - left_toggle_w,
+		top,
+		left_toggle_w,
+		bar_h,
+	}
 	recents_rect := rl.Rectangle{left_toggle_rect.x - gap - btn_w, top, btn_w, bar_h}
 	up_rect := rl.Rectangle{recents_rect.x - gap - 56 * sc, top, 56 * sc, bar_h}
 	path_rect := rl.Rectangle{pad, top, up_rect.x - pad - gap, bar_h}
@@ -1071,7 +1119,12 @@ draw_results_view :: proc(app: ^App) {
 	if draw_button(left_toggle_rect, "Left On" if rs.show_left_panel else "Left Off", t, sc) {
 		results_toggle_left_panel(app)
 	}
-	if draw_button(bottom_toggle_rect, "Bottom On" if rs.show_bottom_panel else "Bottom Off", t, sc) {
+	if draw_button(
+		bottom_toggle_rect,
+		"Bottom On" if rs.show_bottom_panel else "Bottom Off",
+		t,
+		sc,
+	) {
 		results_toggle_bottom_panel(app)
 	}
 	if draw_button(refresh_rect, "Refresh", t, sc) {
@@ -1177,8 +1230,22 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 
 	// Search box filters the listing to matching dirs, .csv and .json files.
 	search_h := 30 * sc
-	search_rect := rl.Rectangle{panel.x + 10 * sc, panel.y + title_h + 2 * sc, panel.width - 20 * sc, search_h}
-	if draw_text_input(app, search_rect, rs.search_buf[:], &rs.search_len, &rs.search_edit, t, sc, "Search files (Ctrl+F)") {
+	search_rect := rl.Rectangle {
+		panel.x + 10 * sc,
+		panel.y + title_h + 2 * sc,
+		panel.width - 20 * sc,
+		search_h,
+	}
+	if draw_text_input(
+		app,
+		search_rect,
+		rs.search_buf[:],
+		&rs.search_len,
+		&rs.search_edit,
+		t,
+		sc,
+		"Search files (Ctrl+F)",
+	) {
 		rs.text_enter = true
 	}
 
@@ -1202,7 +1269,12 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 	// Keyboard navigation (gated so it never fights the palette, the path
 	// input, the search box, an open dropdown, or an Enter a text box just
 	// consumed this frame).
-	if !app.palette.open && !app.palette_just_closed && !rs.path_edit && !rs.search_edit && !rs.text_enter && !results_any_dropdown_open(rs) {
+	if !app.palette.open &&
+	   !app.palette_just_closed &&
+	   !rs.path_edit &&
+	   !rs.search_edit &&
+	   !rs.text_enter &&
+	   !results_any_dropdown_open(rs) {
 		root_changed := false
 		if total_rows > 0 && rl.IsKeyPressed(.DOWN) {
 			rs.file_cursor = min(rs.file_cursor + 1, total_rows - 1)
@@ -1250,12 +1322,17 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 		}
 		// Keep the cursor row visible.
 		if total_rows > 0 {
-			row_y := viewport.y + SCROLLBAR_PAD * sc - rs.file_scroll.offset + f32(rs.file_cursor) * pitch
+			row_y :=
+				viewport.y +
+				SCROLLBAR_PAD * sc -
+				rs.file_scroll.offset +
+				f32(rs.file_cursor) * pitch
 			if row_y < viewport.y {
 				rs.file_scroll.offset = SCROLLBAR_PAD * sc + f32(rs.file_cursor) * pitch
 			}
 			if row_y + row_h > viewport.y + viewport.height {
-				rs.file_scroll.offset = SCROLLBAR_PAD * sc + f32(rs.file_cursor) * pitch + row_h - viewport.height
+				rs.file_scroll.offset =
+					SCROLLBAR_PAD * sc + f32(rs.file_cursor) * pitch + row_h - viewport.height
 			}
 			max_off := max(rs.file_scroll.content - viewport.height, 0)
 			rs.file_scroll.offset = clamp(rs.file_scroll.offset, 0, max_off)
@@ -1357,7 +1434,13 @@ draw_row :: proc(
 	}
 	name_c := strings.clone_to_cstring(label, context.temp_allocator)
 	col := theme.axis_y if is_dir else theme.text
-	draw_text(name_c, c.int(row.x + 28 * sc), c.int(row.y + (row.height - 13 * sc) * 0.5), i32(13 * sc), col)
+	draw_text(
+		name_c,
+		c.int(row.x + 28 * sc),
+		c.int(row.y + (row.height - 13 * sc) * 0.5),
+		i32(13 * sc),
+		col,
+	)
 }
 
 draw_icon_folder :: proc(x, y, s: f32, col: rl.Color) {
@@ -1389,7 +1472,13 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 	draw_panel(panel, t, sc, true)
 
 	title_h := 28 * sc
-	draw_text("Recent folders", c.int(panel.x + 12 * sc), c.int(panel.y + 8 * sc), i32(15 * sc), t.text)
+	draw_text(
+		"Recent folders",
+		c.int(panel.x + 12 * sc),
+		c.int(panel.y + 8 * sc),
+		i32(15 * sc),
+		t.text,
+	)
 
 	clear_rect := rl.Rectangle{panel.x + panel.width - 92 * sc, panel.y + 6 * sc, 80 * sc, 24 * sc}
 	if draw_button(clear_rect, "Clear", t, sc) {
@@ -1401,7 +1490,12 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 		rs.show_recents = false
 	}
 
-	viewport := rl.Rectangle{panel.x, panel.y + title_h + 36 * sc, panel.width, panel.height - title_h - 36 * sc}
+	viewport := rl.Rectangle {
+		panel.x,
+		panel.y + title_h + 36 * sc,
+		panel.width,
+		panel.height - title_h - 36 * sc,
+	}
 	// Snapshot before ui_scroll_begin clears `dragging` on the release frame.
 	was_scroll_drag := rs.dir_scroll.dragging
 	rl.BeginScissorMode(
@@ -1416,7 +1510,13 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 	pitch := row_h + 4 * sc
 	if len(app.recents) == 0 {
 		row := ui_alloc(&u, row_h)
-		draw_text("No recent folders yet", c.int(row.x + 8 * sc), c.int(row.y + 8 * sc), i32(13 * sc), t.muted)
+		draw_text(
+			"No recent folders yet",
+			c.int(row.x + 8 * sc),
+			c.int(row.y + 8 * sc),
+			i32(13 * sc),
+			t.muted,
+		)
 	}
 	for p in app.recents {
 		row := ui_alloc(&u, row_h, 4 * sc)
@@ -1449,7 +1549,17 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 
 // --- plot panel --------------------------------------------------------------
 
-PLOT_NAMES := [?]string{"Map", "Line", "Scatter", "Histogram", "2D", "Mesh", "Quiver", "3D Quiver", "Polar"}
+PLOT_NAMES := [?]string {
+	"Map",
+	"Line",
+	"Scatter",
+	"Histogram",
+	"2D",
+	"Mesh",
+	"Quiver",
+	"3D Quiver",
+	"Polar",
+}
 
 draw_plot_selector :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32) {
 	rs := &app.results
@@ -1465,10 +1575,20 @@ draw_plot_selector :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32)
 		item := rl.Rectangle{rect.x + f32(i) * item_w, rect.y, item_w, rect.height}
 		hover := rl.CheckCollisionPointRec(mouse, item) && !app.palette.open
 		if i == rs.plot.id {
-			pill := rl.Rectangle{item.x + inset, item.y + inset, item.width - 2 * inset, item.height - 2 * inset}
+			pill := rl.Rectangle {
+				item.x + inset,
+				item.y + inset,
+				item.width - 2 * inset,
+				item.height - 2 * inset,
+			}
 			draw_fill_rounded(pill, theme.accent, radius - 1)
 		} else if hover {
-			pill := rl.Rectangle{item.x + inset, item.y + inset, item.width - 2 * inset, item.height - 2 * inset}
+			pill := rl.Rectangle {
+				item.x + inset,
+				item.y + inset,
+				item.width - 2 * inset,
+				item.height - 2 * inset,
+			}
 			draw_fill_rounded(pill, theme.hover, radius - 1)
 		}
 		col := theme.accent_text if i == rs.plot.id else theme.text
@@ -1502,7 +1622,12 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 
 	draw_panel(panel, t, sc, true)
 	inset := 10 * sc
-	inner := rl.Rectangle{panel.x + inset, panel.y + inset, panel.width - 2 * inset, panel.height - 2 * inset}
+	inner := rl.Rectangle {
+		panel.x + inset,
+		panel.y + inset,
+		panel.width - 2 * inset,
+		panel.height - 2 * inset,
+	}
 
 	tab_h := 32 * sc
 	row_gap := 8 * sc
@@ -1532,7 +1657,11 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 				rs.map_bg_init = load_map_background(&rs.map_bg)
 			}
 			if rs.map_view.lon_span == 0 {
-				rs.map_view = Map_View{center_lon = 0, center_lat = 25, lon_span = 360}
+				rs.map_view = Map_View {
+					center_lon = 0,
+					center_lat = 25,
+					lon_span   = 360,
+				}
 			}
 			routes := build_map_routes(app)
 			if len(routes) == 0 {
@@ -1572,7 +1701,18 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 						}
 					}
 					title := "Scatter plot" if rs.plot.id == PLOT_SCATTER else "Line plot"
-					plot_series(app, series, title, x_label, y_name, plot_rect, t, fs, sc, rs.plot.id == PLOT_SCATTER)
+					plot_series(
+						app,
+						series,
+						title,
+						x_label,
+						y_name,
+						plot_rect,
+						t,
+						fs,
+						sc,
+						rs.plot.id == PLOT_SCATTER,
+					)
 				}
 			}
 
@@ -1585,7 +1725,19 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 				} else {
 					col := ds_column(ds, h_name)
 					values := ds_hist_values(col, 100000)
-					plot_histogram(app, values, fmt.tprintf("Histogram: %s (%s)", h_name, ds.name), h_name, "count", rs.plot.bins, plot_rect, t, fs, sc, &rs.plot.bins)
+					plot_histogram(
+						app,
+						values,
+						fmt.tprintf("Histogram: %s (%s)", h_name, ds.name),
+						h_name,
+						"count",
+						rs.plot.bins,
+						plot_rect,
+						t,
+						fs,
+						sc,
+						&rs.plot.bins,
+					)
 				}
 			}
 
@@ -1603,7 +1755,19 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 					if len(pts) == 0 {
 						draw_empty_plot(plot_rect, "No data", t, sc)
 					} else {
-						plot_histogram_2d(app, pts, "2D histogram", x_name, y_name, 0, 0, plot_rect, t, fs, sc)
+						plot_histogram_2d(
+							app,
+							pts,
+							"2D histogram",
+							x_name,
+							y_name,
+							0,
+							0,
+							plot_rect,
+							t,
+							fs,
+							sc,
+						)
 					}
 				}
 			}
@@ -1635,7 +1799,12 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 			} else {
 				mesh := results_ensure_mesh(app, ds)
 				if mesh == nil {
-					draw_empty_plot(plot_rect, "Failed to load mesh (need vertices + triangles)", t, sc)
+					draw_empty_plot(
+						plot_rect,
+						"Failed to load mesh (need vertices + triangles)",
+						t,
+						sc,
+					)
 				} else {
 					xi, yi, zi, ci := results_mesh_field_indices(app, mesh)
 					if xi < 0 || yi < 0 || zi < 0 {
@@ -1662,7 +1831,22 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 					if len(xs) == 0 {
 						draw_empty_plot(plot_rect, "No data", t, sc)
 					} else {
-						plot_quiver(app, xs, ys, us, vs, "Quiver plot", x_name, y_name, plot_rect, t, fs, sc, rs.quiver_scale, &rs.quiver_scale)
+						plot_quiver(
+							app,
+							xs,
+							ys,
+							us,
+							vs,
+							"Quiver plot",
+							x_name,
+							y_name,
+							plot_rect,
+							t,
+							fs,
+							sc,
+							rs.quiver_scale,
+							&rs.quiver_scale,
+						)
 					}
 				}
 			}
@@ -1678,10 +1862,23 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 				u_name := results_col_name(app, rs.plot.u_col)
 				v_name := results_col_name(app, rs.plot.v_col)
 				w_name := results_col_name(app, rs.plot.w_col)
-				if x_name == "" || y_name == "" || z_name == "" || u_name == "" || v_name == "" || w_name == "" {
+				if x_name == "" ||
+				   y_name == "" ||
+				   z_name == "" ||
+				   u_name == "" ||
+				   v_name == "" ||
+				   w_name == "" {
 					draw_empty_plot(plot_rect, "Pick X, Y, Z, U, V and W columns", t, sc)
 				} else {
-					xs, ys, zs, us, vs, ws := build_quiver_3d(app, x_name, y_name, z_name, u_name, v_name, w_name)
+					xs, ys, zs, us, vs, ws := build_quiver_3d(
+						app,
+						x_name,
+						y_name,
+						z_name,
+						u_name,
+						v_name,
+						w_name,
+					)
 					if len(xs) == 0 {
 						draw_empty_plot(plot_rect, "No data", t, sc)
 					} else {
@@ -1690,11 +1887,24 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 						if rs.plot.prev_id != PLOT_QUIVER3D {
 							rs.quiver_view.fit = true
 						}
-						draw_quiver_view(app, xs, ys, zs, us, vs, ws, &rs.quiver_scale, "3D quiver", plot_rect, t, sc)
+						draw_quiver_view(
+							app,
+							xs,
+							ys,
+							zs,
+							us,
+							vs,
+							ws,
+							&rs.quiver_scale,
+							"3D quiver",
+							plot_rect,
+							t,
+							sc,
+						)
 					}
 				}
 			}
-	}
+		}
 	}
 
 	rs.plot.prev_id = rs.plot.id
@@ -1743,7 +1953,7 @@ draw_dropdown_row :: proc(
 	gap := 10 * sc
 	item_w := (rect.width - f32(n - 1) * gap) / f32(n)
 	for i in 0 ..< n {
-		r := rl.Rectangle {rect.x + f32(i) * (item_w + gap), rect.y, item_w, rect.height}
+		r := rl.Rectangle{rect.x + f32(i) * (item_w + gap), rect.y, item_w, rect.height}
 		draw_dropdown(app, r, labels[i], names, sels[i], opens[i], scrolls[i], theme, sc)
 	}
 }
@@ -1763,24 +1973,114 @@ draw_plot_config :: proc(app: ^App, rect: rl.Rectangle) {
 	// "Hue" dropdown that colors points by a third column (seaborn-style).
 	switch rs.plot.id {
 	case PLOT_MAP:
-		draw_dropdown_row(app, rect, {"Lat", "Lon"}, {&rs.plot.lat_col, &rs.plot.lon_col}, {&rs.plot.lat_open, &rs.plot.lon_open}, {&rs.plot.lat_scroll, &rs.plot.lon_scroll}, names, t, sc)
+		draw_dropdown_row(
+			app,
+			rect,
+			{"Lat", "Lon"},
+			{&rs.plot.lat_col, &rs.plot.lon_col},
+			{&rs.plot.lat_open, &rs.plot.lon_open},
+			{&rs.plot.lat_scroll, &rs.plot.lon_scroll},
+			names,
+			t,
+			sc,
+		)
 	case PLOT_LINE, PLOT_SCATTER:
-		draw_dropdown_row(app, rect, {"X", "Y", "Hue"}, {&rs.plot.x_col, &rs.plot.y_col, &rs.plot.h_col}, {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.h_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.h_scroll}, names, t, sc)
+		draw_dropdown_row(
+			app,
+			rect,
+			{"X", "Y", "Hue"},
+			{&rs.plot.x_col, &rs.plot.y_col, &rs.plot.h_col},
+			{&rs.plot.x_open, &rs.plot.y_open, &rs.plot.h_open},
+			{&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.h_scroll},
+			names,
+			t,
+			sc,
+		)
 	case PLOT_HIST:
-		draw_dropdown_row(app, rect, {"Column"}, {&rs.plot.h_col}, {&rs.plot.h_open}, {&rs.plot.h_scroll}, names, t, sc)
+		draw_dropdown_row(
+			app,
+			rect,
+			{"Column"},
+			{&rs.plot.h_col},
+			{&rs.plot.h_open},
+			{&rs.plot.h_scroll},
+			names,
+			t,
+			sc,
+		)
 	case PLOT_HIST2D:
-		draw_dropdown_row(app, rect, {"X", "Y"}, {&rs.plot.x_col, &rs.plot.y_col}, {&rs.plot.x_open, &rs.plot.y_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll}, names, t, sc)
+		draw_dropdown_row(
+			app,
+			rect,
+			{"X", "Y"},
+			{&rs.plot.x_col, &rs.plot.y_col},
+			{&rs.plot.x_open, &rs.plot.y_open},
+			{&rs.plot.x_scroll, &rs.plot.y_scroll},
+			names,
+			t,
+			sc,
+		)
 	case PLOT_POLAR:
-		draw_dropdown_row(app, rect, {"θ", "r", "Hue"}, {&rs.plot.x_col, &rs.plot.y_col, &rs.plot.h_col}, {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.h_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.h_scroll}, names, t, sc)
+		draw_dropdown_row(
+			app,
+			rect,
+			{"θ", "r", "Hue"},
+			{&rs.plot.x_col, &rs.plot.y_col, &rs.plot.h_col},
+			{&rs.plot.x_open, &rs.plot.y_open, &rs.plot.h_open},
+			{&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.h_scroll},
+			names,
+			t,
+			sc,
+		)
 	case PLOT_MESH3D:
-		draw_dropdown_row(app, rect, {"X", "Y", "Z", "Color"}, {&rs.plot.x_col, &rs.plot.y_col, &rs.plot.z_col, &rs.plot.h_col}, {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.z_open, &rs.plot.h_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.z_scroll, &rs.plot.h_scroll}, names, t, sc)
+		draw_dropdown_row(
+			app,
+			rect,
+			{"X", "Y", "Z", "Color"},
+			{&rs.plot.x_col, &rs.plot.y_col, &rs.plot.z_col, &rs.plot.h_col},
+			{&rs.plot.x_open, &rs.plot.y_open, &rs.plot.z_open, &rs.plot.h_open},
+			{&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.z_scroll, &rs.plot.h_scroll},
+			names,
+			t,
+			sc,
+		)
 	case PLOT_QUIVER:
-		draw_dropdown_row(app, rect, {"X", "Y", "U", "V"}, {&rs.plot.x_col, &rs.plot.y_col, &rs.plot.u_col, &rs.plot.v_col}, {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.u_open, &rs.plot.v_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.u_scroll, &rs.plot.v_scroll}, names, t, sc)
+		draw_dropdown_row(
+			app,
+			rect,
+			{"X", "Y", "U", "V"},
+			{&rs.plot.x_col, &rs.plot.y_col, &rs.plot.u_col, &rs.plot.v_col},
+			{&rs.plot.x_open, &rs.plot.y_open, &rs.plot.u_open, &rs.plot.v_open},
+			{&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.u_scroll, &rs.plot.v_scroll},
+			names,
+			t,
+			sc,
+		)
 	case PLOT_QUIVER3D:
 		// Positions on the first row, vector components on the second.
 		row2 := rl.Rectangle{rect.x, rect.y + 34 * sc + 8 * sc, rect.width, 34 * sc}
-		draw_dropdown_row(app, rect, {"X", "Y", "Z"}, {&rs.plot.x_col, &rs.plot.y_col, &rs.plot.z_col}, {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.z_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.z_scroll}, names, t, sc)
-		draw_dropdown_row(app, row2, {"U", "V", "W"}, {&rs.plot.u_col, &rs.plot.v_col, &rs.plot.w_col}, {&rs.plot.u_open, &rs.plot.v_open, &rs.plot.w_open}, {&rs.plot.u_scroll, &rs.plot.v_scroll, &rs.plot.w_scroll}, names, t, sc)
+		draw_dropdown_row(
+			app,
+			rect,
+			{"X", "Y", "Z"},
+			{&rs.plot.x_col, &rs.plot.y_col, &rs.plot.z_col},
+			{&rs.plot.x_open, &rs.plot.y_open, &rs.plot.z_open},
+			{&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.z_scroll},
+			names,
+			t,
+			sc,
+		)
+		draw_dropdown_row(
+			app,
+			row2,
+			{"U", "V", "W"},
+			{&rs.plot.u_col, &rs.plot.v_col, &rs.plot.w_col},
+			{&rs.plot.u_open, &rs.plot.v_open, &rs.plot.w_open},
+			{&rs.plot.u_scroll, &rs.plot.v_scroll, &rs.plot.w_scroll},
+			names,
+			t,
+			sc,
+		)
 	}
 }
 
@@ -1873,9 +2173,17 @@ draw_dropdown :: proc(
 	}
 	txt := fmt.tprintf("%s: %s", label, cur_text)
 	txt_c := strings.clone_to_cstring(txt, context.temp_allocator)
-	draw_text(txt_c, c.int(rect.x + 8 * sc), c.int(rect.y + (rect.height - 14 * sc) * 0.5), i32(13 * sc), theme.text)
+	draw_text(
+		txt_c,
+		c.int(rect.x + 8 * sc),
+		c.int(rect.y + (rect.height - 14 * sc) * 0.5),
+		i32(13 * sc),
+		theme.text,
+	)
 
-	if rl.CheckCollisionPointRec(mouse, rect) && rl.IsMouseButtonReleased(.LEFT) && !app.palette.open {
+	if rl.CheckCollisionPointRec(mouse, rect) &&
+	   rl.IsMouseButtonReleased(.LEFT) &&
+	   !app.palette.open {
 		if !open^ {
 			results_close_column_popups(&app.results, open)
 			app.results.col_filter_len = 0
@@ -1975,13 +2283,23 @@ draw_dropdown :: proc(
 			scroll^ = clamp(scroll^ - int(rl.GetMouseWheelMove()), 0, max_scroll)
 		}
 
-		rl.BeginScissorMode(c.int(popup.x), c.int(popup.y), c.int(popup.width), c.int(popup.height))
+		rl.BeginScissorMode(
+			c.int(popup.x),
+			c.int(popup.y),
+			c.int(popup.width),
+			c.int(popup.height),
+		)
 		draw_shadow(popup, sc, UI_RADIUS_SM * sc)
 		draw_fill_rounded(popup, theme.bg, UI_RADIUS_SM * sc)
 		draw_stroke_rounded(popup, theme.border, UI_RADIUS_SM * sc, 1)
 
 		// Filter box at the top of the popup.
-		search_rect := rl.Rectangle{popup.x + 4 * sc, popup.y + 4 * sc, popup.width - 8 * sc, search_h - 4 * sc}
+		search_rect := rl.Rectangle {
+			popup.x + 4 * sc,
+			popup.y + 4 * sc,
+			popup.width - 8 * sc,
+			search_h - 4 * sc,
+		}
 		draw_fill_rounded(search_rect, theme.window_bg, 4 * sc)
 		draw_stroke_rounded(search_rect, theme.border, 4 * sc, 1)
 		ftext := string(rs.col_filter[:rs.col_filter_len])
@@ -2019,7 +2337,13 @@ draw_dropdown :: proc(
 				draw_fill_rounded(item, theme.hover, 4 * sc)
 			}
 			item_c := strings.clone_to_cstring(names[actual], context.temp_allocator)
-			draw_text(item_c, c.int(item.x + 6 * sc), c.int(item.y + 3 * sc), i32(12 * sc), theme.text)
+			draw_text(
+				item_c,
+				c.int(item.x + 6 * sc),
+				c.int(item.y + 3 * sc),
+				i32(12 * sc),
+				theme.text,
+			)
 			if item_hover && rl.IsMouseButtonReleased(.LEFT) {
 				sel^ = actual
 				open^ = false
@@ -2030,7 +2354,12 @@ draw_dropdown :: proc(
 
 	// Close when clicking anywhere outside the button and popup.
 	if open^ {
-		popup := rl.Rectangle{rect.x, rect.y + rect.height, rect.width, search_h + item_h * f32(max_items) + 6 * sc}
+		popup := rl.Rectangle {
+			rect.x,
+			rect.y + rect.height,
+			rect.width,
+			search_h + item_h * f32(max_items) + 6 * sc,
+		}
 		in_popup := rl.CheckCollisionPointRec(mouse, popup)
 		if rl.IsMouseButtonPressed(.LEFT) && !rl.CheckCollisionPointRec(mouse, rect) && !in_popup {
 			open^ = false
@@ -2043,9 +2372,15 @@ draw_dropdown :: proc(
 // overlaps the column-config popups.
 results_close_column_popups :: proc(rs: ^Results_State, keep: ^bool = nil) {
 	popups := [?]^bool {
-		&rs.plot.x_open, &rs.plot.y_open, &rs.plot.z_open, &rs.plot.h_open,
-		&rs.plot.u_open, &rs.plot.v_open, &rs.plot.w_open,
-		&rs.plot.lat_open, &rs.plot.lon_open,
+		&rs.plot.x_open,
+		&rs.plot.y_open,
+		&rs.plot.z_open,
+		&rs.plot.h_open,
+		&rs.plot.u_open,
+		&rs.plot.v_open,
+		&rs.plot.w_open,
+		&rs.plot.lat_open,
+		&rs.plot.lon_open,
 	}
 	for p in popups {
 		if p != keep {
@@ -2055,16 +2390,18 @@ results_close_column_popups :: proc(rs: ^Results_State, keep: ^bool = nil) {
 }
 
 results_any_dropdown_open :: proc(rs: ^Results_State) -> bool {
-	return rs.plot.x_open ||
-	       rs.plot.y_open ||
-	       rs.plot.z_open ||
-	       rs.plot.h_open ||
-	       rs.plot.u_open ||
-	       rs.plot.v_open ||
-	       rs.plot.w_open ||
-	       rs.plot.lat_open ||
-	       rs.plot.lon_open ||
-	       rs.plot.plot_open
+	return(
+		rs.plot.x_open ||
+		rs.plot.y_open ||
+		rs.plot.z_open ||
+		rs.plot.h_open ||
+		rs.plot.u_open ||
+		rs.plot.v_open ||
+		rs.plot.w_open ||
+		rs.plot.lat_open ||
+		rs.plot.lon_open ||
+		rs.plot.plot_open \
+	)
 }
 
 build_map_routes :: proc(app: ^App) -> []PlotRoute {
@@ -2091,12 +2428,15 @@ build_map_routes :: proc(app: ^App) -> []PlotRoute {
 		if !ok || cache == nil {
 			continue
 		}
-		append(&routes, PlotRoute {
-			name  = ds.name,
-			color = PLOT_COLORS[i % len(PLOT_COLORS)],
-			ds    = ds,
-			cache = cache,
-		})
+		append(
+			&routes,
+			PlotRoute {
+				name = ds.name,
+				color = PLOT_COLORS[i % len(PLOT_COLORS)],
+				ds = ds,
+				cache = cache,
+			},
+		)
 	}
 	return routes[:]
 }
@@ -2114,7 +2454,10 @@ sort_polar_series :: proc(s: ^PlotSeries) {
 	}
 	items := make([]Polar_Sort_Item, n, context.temp_allocator)
 	for i in 0 ..< n {
-		items[i] = Polar_Sort_Item{theta = s.points[i][0], r = s.points[i][1]}
+		items[i] = Polar_Sort_Item {
+			theta = s.points[i][0],
+			r     = s.points[i][1],
+		}
 		if s.hue != nil {
 			items[i].hue = s.hue[i]
 			items[i].has_hue = true
@@ -2176,15 +2519,21 @@ build_line_series :: proc(app: ^App, x_name, y_name: string, hue_name := "") -> 
 build_quiver_2d :: proc(
 	app: ^App,
 	x_name, y_name, u_name, v_name: string,
-) -> ([]f64, []f64, []f64, []f64) {
+) -> (
+	[]f64,
+	[]f64,
+	[]f64,
+	[]f64,
+) {
 	ds := active_dataset(&app.results)
 	if ds == nil {
 		return nil, nil, nil, nil
 	}
-	return ds_quiver_vals(ds, ds_column(ds, x_name), MAX_PLOT_POINTS),
-	       ds_quiver_vals(ds, ds_column(ds, y_name), MAX_PLOT_POINTS),
-	       ds_quiver_vals(ds, ds_column(ds, u_name), MAX_PLOT_POINTS),
-	       ds_quiver_vals(ds, ds_column(ds, v_name), MAX_PLOT_POINTS)
+	return ds_quiver_vals(
+		ds,
+		ds_column(ds, x_name),
+		MAX_PLOT_POINTS,
+	), ds_quiver_vals(ds, ds_column(ds, y_name), MAX_PLOT_POINTS), ds_quiver_vals(ds, ds_column(ds, u_name), MAX_PLOT_POINTS), ds_quiver_vals(ds, ds_column(ds, v_name), MAX_PLOT_POINTS)
 }
 
 // Index-paired component slices for the 3D quiver, stride-sampled from the
@@ -2192,17 +2541,23 @@ build_quiver_2d :: proc(
 build_quiver_3d :: proc(
 	app: ^App,
 	x_name, y_name, z_name, u_name, v_name, w_name: string,
-) -> ([]f64, []f64, []f64, []f64, []f64, []f64) {
+) -> (
+	[]f64,
+	[]f64,
+	[]f64,
+	[]f64,
+	[]f64,
+	[]f64,
+) {
 	ds := active_dataset(&app.results)
 	if ds == nil {
 		return nil, nil, nil, nil, nil, nil
 	}
-	return ds_quiver_vals(ds, ds_column(ds, x_name), MAX_PLOT_POINTS),
-	       ds_quiver_vals(ds, ds_column(ds, y_name), MAX_PLOT_POINTS),
-	       ds_quiver_vals(ds, ds_column(ds, z_name), MAX_PLOT_POINTS),
-	       ds_quiver_vals(ds, ds_column(ds, u_name), MAX_PLOT_POINTS),
-	       ds_quiver_vals(ds, ds_column(ds, v_name), MAX_PLOT_POINTS),
-	       ds_quiver_vals(ds, ds_column(ds, w_name), MAX_PLOT_POINTS)
+	return ds_quiver_vals(
+		ds,
+		ds_column(ds, x_name),
+		MAX_PLOT_POINTS,
+	), ds_quiver_vals(ds, ds_column(ds, y_name), MAX_PLOT_POINTS), ds_quiver_vals(ds, ds_column(ds, z_name), MAX_PLOT_POINTS), ds_quiver_vals(ds, ds_column(ds, u_name), MAX_PLOT_POINTS), ds_quiver_vals(ds, ds_column(ds, v_name), MAX_PLOT_POINTS), ds_quiver_vals(ds, ds_column(ds, w_name), MAX_PLOT_POINTS)
 }
 
 // --- raw data table ----------------------------------------------------------
@@ -2234,7 +2589,10 @@ results_compute_raw_widths :: proc(app: ^App) {
 // would dereference an empty font atlas.
 text_width_ui :: proc(s: string, font_size: i32, sc: f32) -> f32 {
 	if app_font.texture.id != 0 {
-		return f32(measure_text(strings.clone_to_cstring(s, context.temp_allocator), font_size)) + 16 * sc
+		return(
+			f32(measure_text(strings.clone_to_cstring(s, context.temp_allocator), font_size)) +
+			16 * sc \
+		)
 	}
 	return f32(len(s)) * f32(font_size) * 0.55 + 16 * sc
 }
@@ -2252,16 +2610,33 @@ draw_raw_table :: proc(app: ^App, rect: rl.Rectangle) {
 
 	ds := active_dataset(rs)
 	if ds == nil {
-		draw_text("No data selected", c.int(rect.x + 12 * sc), c.int(rect.y + 12 * sc), i32(13 * sc), t.muted)
+		draw_text(
+			"No data selected",
+			c.int(rect.x + 12 * sc),
+			c.int(rect.y + 12 * sc),
+			i32(13 * sc),
+			t.muted,
+		)
 		return
 	}
 	if len(ds.columns) == 0 {
-		draw_text("No columns", c.int(rect.x + 12 * sc), c.int(rect.y + 12 * sc), i32(13 * sc), t.muted)
+		draw_text(
+			"No columns",
+			c.int(rect.x + 12 * sc),
+			c.int(rect.y + 12 * sc),
+			i32(13 * sc),
+			t.muted,
+		)
 		return
 	}
 
 	// --- vertical scrolling (wheel + scrollbar drag) ------------------------
-	viewport := rl.Rectangle{rect.x, rect.y + header_h, rect.width, rect.height - header_h - footer_h}
+	viewport := rl.Rectangle {
+		rect.x,
+		rect.y + header_h,
+		rect.width,
+		rect.height - header_h - footer_h,
+	}
 	rs.raw_scroll.content = f32(ds.n_rows) * row_h
 	max_offset := max(rs.raw_scroll.content - viewport.height, 0)
 	rs.raw_scroll.offset = clamp(rs.raw_scroll.offset, 0, max_offset)
@@ -2269,11 +2644,20 @@ draw_raw_table :: proc(app: ^App, rect: rl.Rectangle) {
 	if !app.palette.open {
 		shift := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
 		if rl.CheckCollisionPointRec(mouse, viewport) && !shift {
-			rs.raw_scroll.offset = clamp(rs.raw_scroll.offset - rl.GetMouseWheelMove() * WHEEL_STEP * sc, 0, max_offset)
+			rs.raw_scroll.offset = clamp(
+				rs.raw_scroll.offset - rl.GetMouseWheelMove() * WHEEL_STEP * sc,
+				0,
+				max_offset,
+			)
 		}
 		if max_offset > 0 {
 			track := scroll_track(viewport, sc)
-			thumb, _ := scroll_thumb_of(rs.raw_scroll, track, viewport.height, SCROLLBAR_MIN_THUMB * sc)
+			thumb, _ := scroll_thumb_of(
+				rs.raw_scroll,
+				track,
+				viewport.height,
+				SCROLLBAR_MIN_THUMB * sc,
+			)
 			if rl.IsMouseButtonPressed(.LEFT) {
 				if rl.CheckCollisionPointRec(mouse, thumb) {
 					rs.raw_scroll.dragging = true
@@ -2303,7 +2687,12 @@ draw_raw_table :: proc(app: ^App, rect: rl.Rectangle) {
 	}
 
 	// --- rows (clipped below the header) ------------------------------------
-	rl.BeginScissorMode(c.int(rect.x), c.int(rect.y + header_h), c.int(rect.width), c.int(viewport.height))
+	rl.BeginScissorMode(
+		c.int(rect.x),
+		c.int(rect.y + header_h),
+		c.int(rect.width),
+		c.int(viewport.height),
+	)
 	row0 := int(rs.raw_scroll.offset / row_h)
 	nvis := int(math.ceil(viewport.height / row_h)) + 1
 	for r in row0 ..< min(ds.n_rows, row0 + nvis) {
@@ -2318,7 +2707,12 @@ draw_raw_table :: proc(app: ^App, rect: rl.Rectangle) {
 	// vertical scrollbar
 	if max_offset > 0 {
 		track := scroll_track(viewport, sc)
-		thumb, _ := scroll_thumb_of(rs.raw_scroll, track, viewport.height, SCROLLBAR_MIN_THUMB * sc)
+		thumb, _ := scroll_thumb_of(
+			rs.raw_scroll,
+			track,
+			viewport.height,
+			SCROLLBAR_MIN_THUMB * sc,
+		)
 		draw_scrollbar(track, thumb, t, sc)
 	}
 	rl.EndScissorMode()
@@ -2391,7 +2785,13 @@ draw_raw_table :: proc(app: ^App, rect: rl.Rectangle) {
 	}
 
 	summary := fmt.ctprintf("%s · %d rows × %d cols", ds.name, ds.n_rows, len(ds.columns))
-	draw_text(summary, c.int(rect.x + 12 * sc), c.int(rect.y + rect.height - 22 * sc), i32(11 * sc), t.muted)
+	draw_text(
+		summary,
+		c.int(rect.x + 12 * sc),
+		c.int(rect.y + rect.height - 22 * sc),
+		i32(11 * sc),
+		t.muted,
+	)
 }
 
 draw_row_cells :: proc(
@@ -2417,7 +2817,13 @@ draw_row_cells :: proc(
 		if len(cell_str) > 0 {
 			col := theme.text if row < 0 else rl.Fade(theme.text, 0.85)
 			cell_c := strings.clone_to_cstring(cell_str, context.temp_allocator)
-			draw_text(cell_c, c.int(cell_rect.x + 4 * sc), c.int(cell_rect.y + 3 * sc), i32(12 * sc), col)
+			draw_text(
+				cell_c,
+				c.int(cell_rect.x + 4 * sc),
+				c.int(cell_rect.y + 3 * sc),
+				i32(12 * sc),
+				col,
+			)
 		}
 		x += w
 	}
@@ -2524,12 +2930,27 @@ draw_text_input :: proc(
 	text := string(buf[:length^])
 	if len(text) > 0 {
 		text_c := strings.clone_to_cstring(text, context.temp_allocator)
-		draw_text(text_c, c.int(rect.x + 8 * sc), c.int(rect.y + (rect.height - 14 * sc) * 0.5), i32(14 * sc), theme.text)
+		draw_text(
+			text_c,
+			c.int(rect.x + 8 * sc),
+			c.int(rect.y + (rect.height - 14 * sc) * 0.5),
+			i32(14 * sc),
+			theme.text,
+		)
 	} else if hint != nil && !editing^ {
-		draw_text(hint, c.int(rect.x + 8 * sc), c.int(rect.y + (rect.height - 14 * sc) * 0.5), i32(14 * sc), theme.muted)
+		draw_text(
+			hint,
+			c.int(rect.x + 8 * sc),
+			c.int(rect.y + (rect.height - 14 * sc) * 0.5),
+			i32(14 * sc),
+			theme.muted,
+		)
 	}
 	if editing^ && i32(rl.GetTime() * 2) % 2 == 0 {
-		cx := rect.x + 8 * sc + f32(measure_text(strings.clone_to_cstring(text, context.temp_allocator), i32(14 * sc)))
+		cx :=
+			rect.x +
+			8 * sc +
+			f32(measure_text(strings.clone_to_cstring(text, context.temp_allocator), i32(14 * sc)))
 		rl.DrawLine(
 			c.int(cx),
 			c.int(rect.y + 5 * sc),
@@ -2548,3 +2969,4 @@ draw_text_input :: proc(
 	}
 	return false
 }
+
