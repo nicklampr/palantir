@@ -30,6 +30,7 @@ PLOT_HIST2D :: 4
 PLOT_MESH3D :: 5
 PLOT_QUIVER :: 6
 PLOT_QUIVER3D :: 7
+PLOT_POLAR :: 8
 
 File_Entry :: struct {
 	name:   string,
@@ -932,6 +933,7 @@ results_handle_shortcuts :: proc(app: ^App) {
 		if rl.IsKeyPressed(.SIX) {rs.plot.id = PLOT_MESH3D}
 		if rl.IsKeyPressed(.SEVEN) {rs.plot.id = PLOT_QUIVER}
 		if rl.IsKeyPressed(.EIGHT) {rs.plot.id = PLOT_QUIVER3D}
+		if rl.IsKeyPressed(.NINE) {rs.plot.id = PLOT_POLAR}
 	}
 }
 
@@ -1447,7 +1449,7 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 
 // --- plot panel --------------------------------------------------------------
 
-PLOT_NAMES := [?]string{"Map", "Line", "Scatter", "Histogram", "2D", "Mesh", "Quiver", "3D Quiver"}
+PLOT_NAMES := [?]string{"Map", "Line", "Scatter", "Histogram", "2D", "Mesh", "Quiver", "3D Quiver", "Polar"}
 
 draw_plot_selector :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32) {
 	rs := &app.results
@@ -1606,6 +1608,26 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 				}
 			}
 
+		case PLOT_POLAR:
+			theta_name := results_col_name(app, rs.plot.x_col)
+			r_name := results_col_name(app, rs.plot.y_col)
+			if theta_name == "" || r_name == "" {
+				draw_empty_plot(plot_rect, "Pick θ and r columns", t, sc)
+			} else {
+				hue_name := results_col_name(app, rs.plot.h_col)
+				series := build_line_series(app, theta_name, r_name, hue_name)
+				if len(series) == 0 {
+					draw_empty_plot(plot_rect, "No data", t, sc)
+				} else {
+					// Sort each series by angle so the polar line traces a curve
+					// instead of jumping back and forth across the origin.
+					for s_idx in 0 ..< len(series) {
+						sort_polar_series(&series[s_idx])
+					}
+					plot_polar(app, series, "Polar plot", "θ (deg)", r_name, plot_rect, t, fs, sc)
+				}
+			}
+
 		case PLOT_MESH3D:
 			ds := active_dataset(rs)
 			if ds == nil {
@@ -1748,6 +1770,8 @@ draw_plot_config :: proc(app: ^App, rect: rl.Rectangle) {
 		draw_dropdown_row(app, rect, {"Column"}, {&rs.plot.h_col}, {&rs.plot.h_open}, {&rs.plot.h_scroll}, names, t, sc)
 	case PLOT_HIST2D:
 		draw_dropdown_row(app, rect, {"X", "Y"}, {&rs.plot.x_col, &rs.plot.y_col}, {&rs.plot.x_open, &rs.plot.y_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll}, names, t, sc)
+	case PLOT_POLAR:
+		draw_dropdown_row(app, rect, {"θ", "r", "Hue"}, {&rs.plot.x_col, &rs.plot.y_col, &rs.plot.h_col}, {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.h_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.h_scroll}, names, t, sc)
 	case PLOT_MESH3D:
 		draw_dropdown_row(app, rect, {"X", "Y", "Z", "Color"}, {&rs.plot.x_col, &rs.plot.y_col, &rs.plot.z_col, &rs.plot.h_col}, {&rs.plot.x_open, &rs.plot.y_open, &rs.plot.z_open, &rs.plot.h_open}, {&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.z_scroll, &rs.plot.h_scroll}, names, t, sc)
 	case PLOT_QUIVER:
@@ -2075,6 +2099,38 @@ build_map_routes :: proc(app: ^App) -> []PlotRoute {
 		})
 	}
 	return routes[:]
+}
+
+// Sorts a polar series by ascending angle, keeping the per-point hue array in
+// lockstep so hue[i] stays paired with points[i].
+sort_polar_series :: proc(s: ^PlotSeries) {
+	n := len(s.points)
+	if n < 2 {
+		return
+	}
+	Polar_Sort_Item :: struct {
+		theta, r, hue: f64,
+		has_hue:       bool,
+	}
+	items := make([]Polar_Sort_Item, n, context.temp_allocator)
+	for i in 0 ..< n {
+		items[i] = Polar_Sort_Item{theta = s.points[i][0], r = s.points[i][1]}
+		if s.hue != nil {
+			items[i].hue = s.hue[i]
+			items[i].has_hue = true
+		}
+	}
+	sort.quick_sort_proc(items, proc(a, b: Polar_Sort_Item) -> int {
+		if a.theta < b.theta {return -1}
+		if a.theta > b.theta {return 1}
+		return 0
+	})
+	for i in 0 ..< n {
+		s.points[i] = [2]f64{items[i].theta, items[i].r}
+		if s.hue != nil {
+			s.hue[i] = items[i].hue
+		}
+	}
 }
 
 // Builds the per-dataset series for the Line/Scatter plot. When `hue_name` is

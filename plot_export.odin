@@ -115,6 +115,41 @@ plot_export_series :: proc(
 	return false
 }
 
+plot_export_polar :: proc(
+	app: ^App,
+	series: []PlotSeries,
+	title, angle_label, radius_label: string,
+	rect: rl.Rectangle,
+	theme: Theme,
+	font_size: i32,
+	sc: f32,
+) -> bool {
+	path := plot_export_path(app, title)
+	rt, ok := plot_export_begin(app, c.int(rect.width), c.int(rect.height))
+	if !ok {return false}
+	defer plot_export_finish(app, rt)
+
+	rl.BeginTextureMode(rt)
+	plot_polar(
+		app,
+		series,
+		title,
+		angle_label,
+		radius_label,
+		rl.Rectangle{0, 0, rect.width, rect.height},
+		theme,
+		font_size,
+		sc,
+	)
+	rl.EndTextureMode()
+
+	if plot_export_write(rt, path) {
+		plot_export_feedback(app, title)
+		return true
+	}
+	return false
+}
+
 plot_export_histogram :: proc(
 	app: ^App,
 	values: []f32,

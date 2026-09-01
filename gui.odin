@@ -575,7 +575,7 @@ Plot_Layout :: struct {
 // Shared, named layouts for the three plot widgets.
 lineplot_margins := Plot_Layout{70, 26, 16, 22}
 histogram_margins := Plot_Layout{46, 26, 12, 22}
-histogram2d_margins := Plot_Layout{46, 26, 40, 22} // right side holds the colorbar
+histogram2d_margins := Plot_Layout{46, 36, 40, 22} // right side holds the colorbar
 
 // Data region of a plot panel given its outer `rect` and named margins.
 plot_area_of :: proc(rect: rl.Rectangle, m: Plot_Layout, sc: f32) -> rl.Rectangle {
@@ -1001,6 +1001,232 @@ plot_series :: proc(
 			sc,
 			scatter,
 		)
+	}
+}
+
+// Right side holds the colorbar when a hue column is active.
+polar_margins := Plot_Layout{58, 36, 46, 30}
+polar_margins_nohue := Plot_Layout{58, 26, 16, 30}
+
+// Polar line plot. Each `PlotSeries.points[i]` is [angle (degrees), radius].
+// Optional per-point `hue` colors the line/markers via a colormap + colorbar.
+// Shares the panel/grid/tooltip/save style of `plot_series`.
+plot_polar :: proc(
+	app: ^App,
+	series: []PlotSeries,
+	title, angle_label, radius_label: string,
+	rect: rl.Rectangle,
+	theme: Theme,
+	font_size: i32,
+	ui_scale: f32 = 1,
+) {
+	sc := ui_scale
+	draw_fill_rounded(rect, theme.window_bg, UI_RADIUS_SM * sc)
+
+	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
+	draw_text(title_cstr, i32(rect.x + 8 * sc), i32(rect.y + 4 * sc), i32(11 * sc), theme.muted)
+
+	has_hue := false
+	for ps in series {
+		if ps.hue != nil {
+			has_hue = true
+			break
+		}
+	}
+	m := polar_margins_nohue
+	if has_hue {m = polar_margins}
+	plot_area := plot_area_of(rect, m, sc)
+
+	if len(series) == 0 {
+		draw_text("No data", i32(plot_area.x), i32(plot_area.y), i32(10 * sc), theme.text)
+		return
+	}
+
+	r_max := 0.0
+	has_data := false
+	for ps in series {
+		for p in ps.points {
+			if math.is_nan(p[0]) || math.is_nan(p[1]) {continue}
+			has_data = true
+			r_max = max(r_max, math.abs(p[1]))
+		}
+	}
+	if !has_data {return}
+	if r_max <= 0 {r_max = 1}
+
+	cx := plot_area.x + plot_area.width * 0.5
+	cy := plot_area.y + plot_area.height * 0.5
+	radius_px := min(plot_area.width, plot_area.height) * 0.5 - 22 * sc
+	if radius_px <= 1 {radius_px = 1}
+
+	hue_lo, hue_hi, hue_ok := f64(0), f64(1), false
+	hue_label := ""
+	if has_hue {
+		hue_lo, hue_hi, hue_ok = hue_domain_of(series)
+		for ps in series {
+			if ps.hue != nil && len(ps.hue_name) > 0 {
+				hue_label = ps.hue_name
+				break
+			}
+		}
+	}
+
+	// Concentric radius rings + labels.
+	for i in 1 ..= 4 {
+		frac := f32(i) / 4.0
+		rr := radius_px * frac
+		rl.DrawCircleLines(i32(cx), i32(cy), rr, theme.grid)
+		lbl := strings.clone_to_cstring(fmt.tprintf("%.3g", f64(frac) * r_max), context.temp_allocator)
+		tw := f32(measure_text(lbl, font_size - 2))
+		draw_text(
+			lbl,
+			i32(cx + rr - tw * 0.5),
+			i32(cy - rr - f32(font_size - 2) * 0.5),
+			font_size - 2,
+			theme.text,
+		)
+	}
+
+	// Radial spokes every 30 degrees + angle labels (degrees) at the rim.
+	// 0° = North: spokes/labels are rotated +90° from the data angle.
+	for deg := 0; deg < 360; deg += 30 {
+		dir := math.to_radians(f64(deg)) + math.PI / 2
+		dx := f32(math.cos(dir))
+		dy := f32(math.sin(dir))
+		x1 := cx + dx * radius_px
+		y1 := cy - dy * radius_px
+		rl.DrawLine(i32(cx), i32(cy), i32(x1), i32(y1), theme.grid)
+
+		lx := cx + dx * (radius_px + 6 * sc)
+		ly := cy - dy * (radius_px + 6 * sc)
+		lbl := strings.clone_to_cstring(fmt.tprintf("%.0f°", f64(deg)), context.temp_allocator)
+		tw := f32(measure_text(lbl, font_size - 2))
+		th := f32(font_size - 2)
+		draw_text(
+			lbl,
+			i32(lx - tw * 0.5),
+			i32(ly - th * 0.5),
+			font_size - 2,
+			theme.text,
+		)
+	}
+
+	// Radius axis label (rotated) and angle label.
+	r_lbl_c := strings.clone_to_cstring(radius_label, context.temp_allocator)
+	r_ts := rl.MeasureTextEx(app_font, r_lbl_c, f32(font_size), 1)
+	r_pos := rl.Vector2{rect.x + 4 * sc, cy + r_ts.y * 0.5}
+	rl.DrawTextPro(app_font, r_lbl_c, r_pos, {r_ts.x * 0.5, r_ts.y * 0.5}, -90, f32(font_size), 1, theme.text)
+
+	a_lbl_c := strings.clone_to_cstring(angle_label, context.temp_allocator)
+	draw_text(
+		a_lbl_c,
+		i32(cx - f32(measure_text(a_lbl_c, font_size)) * 0.5),
+		i32(cy + radius_px + 12 * sc),
+		font_size,
+		theme.text,
+	)
+
+	// Data: connecting segments (tinted by hue midpoint when active) + markers.
+	line_w := max(1.0, 1.25 * sc)
+	pt_r := 2.5 * sc
+	project :: proc(p: [2]f64, cx, cy, radius_px: f32, r_max: f64) -> (sx, sy: f32) {
+		// 0° = North (up): convert degrees to radians, then rotate by +90°.
+		theta := math.to_radians(p[0]) + math.PI / 2
+		r := math.abs(p[1])
+		pr := f32(r / r_max) * radius_px
+		return cx + pr * f32(math.cos(theta)), cy - pr * f32(math.sin(theta))
+	}
+	for s_idx in 0 ..< len(series) {
+		base_color := PLOT_COLORS[s_idx % len(PLOT_COLORS)]
+		pts := series[s_idx].points
+		hue := series[s_idx].hue
+		if len(pts) == 0 {continue}
+
+		for i in 0 ..< len(pts) - 1 {
+			x1, y1 := project(pts[i], cx, cy, radius_px, r_max)
+			x2, y2 := project(pts[i + 1], cx, cy, radius_px, r_max)
+			col := base_color
+			if hue != nil && hue_ok && !math.is_nan(hue[i]) && !math.is_nan(hue[i + 1]) {
+				col = hue_lookup(hue_lo, hue_hi, (hue[i] + hue[i + 1]) * 0.5, theme.axis_x, theme.axis_z)
+			}
+			rl.DrawLineEx(rl.Vector2{x1, y1}, rl.Vector2{x2, y2}, line_w, col)
+		}
+		for p, pi in pts {
+			sx, sy := project(p, cx, cy, radius_px, r_max)
+			col := base_color
+			if hue != nil && hue_ok && !math.is_nan(hue[pi]) {
+				col = hue_lookup(hue_lo, hue_hi, hue[pi], theme.axis_x, theme.axis_z)
+			}
+			rl.DrawCircle(i32(sx), i32(sy), pt_r, col)
+		}
+	}
+
+	// Colorbar legend.
+	if has_hue && hue_ok {
+		draw_plot_colorbar(rect, plot_area, hue_lo, hue_hi, hue_label, theme, font_size, sc)
+	}
+
+	// Hover tooltip.
+	if !app.exporting {
+		mouse := rl.GetMousePosition()
+		if mouse.x >= plot_area.x &&
+		   mouse.x <= plot_area.x + plot_area.width &&
+		   mouse.y >= plot_area.y &&
+		   mouse.y <= plot_area.y + plot_area.height {
+			best_idx := -1
+			best_k := -1
+			best_dist := f64(math.inf_f64(1))
+			best_pt: [2]f64
+			for s_idx in 0 ..< len(series) {
+				for p, k in series[s_idx].points {
+					sx, sy := project(p, cx, cy, radius_px, r_max)
+					dx := f64(mouse.x - sx)
+					dy := f64(mouse.y - sy)
+					dist := math.sqrt(dx * dx + dy * dy)
+					if dist < best_dist {
+						best_dist = dist
+						best_idx = s_idx
+						best_k = k
+						best_pt = p
+					}
+				}
+			}
+			threshold := f64(12 * sc)
+			if best_idx >= 0 && best_dist < threshold {
+				sx, sy := project(best_pt, cx, cy, radius_px, r_max)
+				hover_col := PLOT_COLORS[best_idx % len(PLOT_COLORS)]
+				if h := series[best_idx].hue; h != nil && hue_ok && best_k >= 0 && best_k < len(h) {
+					if !math.is_nan(h[best_k]) {
+						hover_col = hue_lookup(hue_lo, hue_hi, h[best_k], theme.axis_x, theme.axis_z)
+					}
+				}
+				rl.DrawCircleLines(i32(sx), i32(sy), 6 * sc, theme.text)
+				rl.DrawCircle(i32(sx), i32(sy), pt_r + 1, hover_col)
+
+				lines := [3]string{}
+				n := 0
+				if len(series[best_idx].name) > 0 {
+					lines[n] = series[best_idx].name
+					n += 1
+				}
+				theta := best_pt[0]
+				if theta >= 360.0 {theta -= 360.0}
+				lines[n] = fmt.tprintf("θ=%.4f°  r=%.4f", theta, best_pt[1])
+				n += 1
+				if h := series[best_idx].hue;
+				   h != nil && hue_ok && best_k >= 0 && best_k < len(h) && !math.is_nan(h[best_k]) {
+					name := series[best_idx].hue_name if len(series[best_idx].hue_name) > 0 else "hue"
+					lines[n] = fmt.tprintf("%s=%.4g", name, h[best_k])
+					n += 1
+				}
+				draw_tooltip(mouse, plot_area, lines[:n], theme, font_size, sc)
+			}
+		}
+	}
+
+	// Save PNG (shared widget, see plot_export.odin).
+	if plot_save_button(app, rect, title, theme, sc) {
+		plot_export_polar(app, series, title, angle_label, radius_label, rect, theme, font_size, sc)
 	}
 }
 
