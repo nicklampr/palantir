@@ -36,10 +36,16 @@ load_app_font :: proc() {
 		defer delete(buf)
 		copy(buf, APP_FONT_DATA)
 
-		GLYPH_COUNT :: 95 // ASCII 32..126
+		// raylib renders any codepoint missing from the atlas as '?', so load
+		// the ASCII range plus the few non-ASCII glyphs the UI actually draws.
+		EXTRA_GLYPHS :: [?]rune{0x00B0, 0x03B8} // ° degree, θ theta
+		GLYPH_COUNT :: 95 + len(EXTRA_GLYPHS)
 		codepoints: [GLYPH_COUNT]rune
-		for i in 0 ..< GLYPH_COUNT {
+		for i in 0 ..< 95 {
 			codepoints[i] = rune(32 + i)
+		}
+		for cp, i in EXTRA_GLYPHS {
+			codepoints[95 + i] = cp
 		}
 		glyph_count: c.int
 		glyphs := rl.LoadFontData(
