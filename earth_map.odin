@@ -378,43 +378,89 @@ draw_map_background :: proc(g: Map_Geom, bg: ^Map_Background) {
 
 // --- drawing ---------------------------------------------------------------
 
+// Longitude unwrapping: shift lon by whole 360° turns until it lies within
+// ±180° of ref. Used to keep a route crossing the antimeridian on one
+// continuous longitude track instead of jumping from +180 back to -180 (which
+// would draw a streak across the whole map).
+lon_unwrap_near :: proc(lon_in, ref: f32) -> (lon: f32) {
+	lon = lon_in
+	for lon - ref > 180 do lon -= 360
+	for ref - lon > 180 do lon += 360
+	return
+}
+
+// Project an unwrapped world-space point (wx may lie outside [0, 1]) to
+// screen for the whole-world copy at offset k. ok is false when that copy is
+// outside the padded cull rect. Mirrors map_project but allows wx to track
+// past the dateline.
+route_project :: proc(g: Map_Geom, wx, wy, k: f32) -> (sx, sy: f32, ok: bool) {
+	ox := wx + k
+	if ox < g.cull_left || ox > g.cull_right || wy < g.cull_top || wy > g.cull_bottom {
+		return 0, 0, false
+	}
+	sx = g.plot.x + (ox - g.left) / g.span_x * g.plot.width
+	sy = g.plot.y + (wy - g.top) / g.span_y * g.plot.height
+	return sx, sy, true
+}
+
 draw_routes :: proc(routes: []PlotRoute, view: Map_View, plot: rl.Rectangle, sc: f32) {
 	g := map_geom(view, plot)
 	core_w := 2.5 * sc
 	halo_w := core_w * 3.2
 	for route in routes {
-		prev_ok := false
-		prev_sx, prev_sy: f32
 		started := false
-		last_ok := false
-		last_sx, last_sy: f32
+		prev_wx, prev_wy: f32 // unwrapped world coords of the previous point
+		prev_lon: f32 // unwrapped longitude of the previous point
+		end_wx, end_wy: f32 // unwrapped world coords of the last point
 		for pi in 0 ..< len(route.cache.lat) {
-			sx, sy, ok := map_project(g, f32(route.cache.lon[pi]), f32(route.cache.lat[pi]))
-			if !ok {
-				prev_ok = false
-				continue
+			p_lon := f32(route.cache.lon[pi])
+			p_lat := f32(route.cache.lat[pi])
+			// Unwrap the longitude onto a continuous track: pick the lon+360k
+			// copy nearest the previous point so a route crossing the
+			// antimeridian continues over the map edge instead of jumping back
+			// across the world. Unwrapped wx can lie outside [0, 1].
+			lon := p_lon
+			if started {
+				lon = lon_unwrap_near(p_lon, prev_lon)
 			}
-			if !started {
-				// glow cap on the route start
-				rl.DrawCircleV(rl.Vector2{sx, sy}, halo_w * 0.5, rl.Fade(route.color, 0.28))
-				started = true
+			wx := (lon + 180) / 360
+			wy := map_world(p_lon, p_lat)[1]
+
+			// Draw every wrapped whole-world copy the view touches (k shifts
+			// wx by whole turns); k in -1..=1 covers the 360° max zoom-out.
+			for k in -1 ..= 1 {
+				sx, sy, ok := route_project(g, wx, wy, f32(k))
+				if !ok {
+					continue
+				}
+				if !started {
+					// glow cap on the route start
+					rl.DrawCircleV(rl.Vector2{sx, sy}, halo_w * 0.5, rl.Fade(route.color, 0.28))
+				}
+				if started {
+					// segment to the previous point's copy at the same offset
+					if psx, psy, pok := route_project(g, prev_wx, prev_wy, f32(k)); pok {
+						start := rl.Vector2{psx, psy}
+						end := rl.Vector2{sx, sy}
+						rl.DrawLineEx(start, end, halo_w, rl.Fade(route.color, 0.28))
+						rl.DrawLineEx(start, end, core_w, route.color)
+					}
+				}
+				// round the core joins and cap the line
+				rl.DrawCircleV(rl.Vector2{sx, sy}, core_w * 0.5, route.color)
 			}
-			if prev_ok {
-				start := rl.Vector2{prev_sx, prev_sy}
-				end := rl.Vector2{sx, sy}
-				rl.DrawLineEx(start, end, halo_w, rl.Fade(route.color, 0.28))
-				rl.DrawLineEx(start, end, core_w, route.color)
-			}
-			// round the core joins and cap the line
-			rl.DrawCircleV(rl.Vector2{sx, sy}, core_w * 0.5, route.color)
-			prev_sx, prev_sy = sx, sy
-			prev_ok = true
-			last_ok = true
-			last_sx, last_sy = sx, sy
+			prev_wx, prev_wy = wx, wy
+			prev_lon = lon
+			started = true
+			end_wx, end_wy = wx, wy
 		}
-		if last_ok {
-			// glow cap on the route end
-			rl.DrawCircleV(rl.Vector2{last_sx, last_sy}, halo_w * 0.5, rl.Fade(route.color, 0.28))
+		if started {
+			// glow cap on the route end, on every visible wrapped copy
+			for k in -1 ..= 1 {
+				if sx, sy, ok := route_project(g, end_wx, end_wy, f32(k)); ok {
+					rl.DrawCircleV(rl.Vector2{sx, sy}, halo_w * 0.5, rl.Fade(route.color, 0.28))
+				}
+			}
 		}
 	}
 }
@@ -551,15 +597,22 @@ draw_map_hover_tooltip :: proc(
 	for ri in 0 ..< len(routes) {
 		cache := routes[ri].cache
 		for pi in 0 ..< len(cache.lat) {
-			sx, sy, ok := map_project(g, f32(cache.lon[pi]), f32(cache.lat[pi]))
-			if !ok {continue}
-			dx := f64(mouse.x - sx)
-			dy := f64(mouse.y - sy)
-			d := math.sqrt(dx * dx + dy * dy)
-			if d < best_dist {
-				best_dist = d
-				best_route = ri
-				best_pt = pi
+			w := map_world(f32(cache.lon[pi]), f32(cache.lat[pi]))
+			// try each whole-world copy the view can touch (matches the
+			// wrapped rendering in draw_routes)
+			for k in -1 ..= 1 {
+				sx, sy, ok := route_project(g, w[0], w[1], f32(k))
+				if !ok {
+					continue
+				}
+				dx := f64(mouse.x - sx)
+				dy := f64(mouse.y - sy)
+				d := math.sqrt(dx * dx + dy * dy)
+				if d < best_dist {
+					best_dist = d
+					best_route = ri
+					best_pt = pi
+				}
 			}
 		}
 	}
