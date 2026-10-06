@@ -98,6 +98,33 @@ quiver2d_magnitude_range :: proc(arrows: []Quiver2D) -> (lo, hi: f64, ok: bool) 
 	return
 }
 
+// Min/max of optional per-arrow values. NaNs and arrows without valid
+// positions/components are ignored; a degenerate domain is expanded by 1.
+quiver2d_color_range :: proc(arrows: []Quiver2D, values: []f64) -> (lo, hi: f64, ok: bool) {
+	if len(values) != len(arrows) {
+		return 0, 1, false
+	}
+	lo = math.inf_f64(1)
+	hi = math.inf_f64(-1)
+	for a, i in arrows {
+		value := values[i]
+		if math.is_nan(a.x) || math.is_nan(a.y) ||
+		   math.is_nan(a.u) || math.is_nan(a.v) || math.is_nan(value) {
+			continue
+		}
+		lo = min(lo, value)
+		hi = max(hi, value)
+		ok = true
+	}
+	if !ok {
+		return 0, 1, false
+	}
+	if lo == hi {
+		hi = lo + 1
+	}
+	return
+}
+
 // Data bounds covering both tails and heads, NaN-safe. `ok` is false when no
 // arrow has finite values.
 quiver2d_bounds :: proc(arrows: []Quiver2D) -> (minp, maxp: [2]f64, ok: bool) {
@@ -166,6 +193,8 @@ plot_quiver :: proc(
 	ui_scale: f32 = 1,
 	scale: f32 = 1,
 	scale_edit: ^f32 = nil,
+	color_values: []f64 = nil,
+	color_label: string = "",
 ) {
 	sc := ui_scale
 	draw_fill_rounded(rect, theme.window_bg, UI_RADIUS_SM * sc)
@@ -173,7 +202,7 @@ plot_quiver :: proc(
 	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
 	draw_text(title_cstr, i32(rect.x + 8 * sc), i32(rect.y + 4 * sc), i32(11 * sc), theme.muted)
 
-	plot_area := plot_area_of(rect, lineplot_margins, sc)
+	plot_area := plot_area_of(rect, Plot_Layout{70, 26, 40, 22}, sc)
 
 	arrows := quiver2d_from_arrays(X, Y, U, V)
 	minp, maxp, ok := quiver2d_bounds(arrows)
@@ -230,7 +259,15 @@ plot_quiver :: proc(
 
 	draw_plot_axis_labels(rect, plot_area, x_label, y_label, theme, font_size, sc)
 
-	mag_lo, mag_hi, mag_ok := quiver2d_magnitude_range(arrows)
+	color_lo, color_hi, color_ok := quiver2d_magnitude_range(arrows)
+	use_color_column := false
+	if len(color_values) == len(arrows) {
+		if lo, hi, ok := quiver2d_color_range(arrows, color_values); ok {
+			color_lo, color_hi, color_ok = lo, hi, true
+			use_color_column = true
+		}
+	}
+	color_label_text := color_label if color_label != "" else "Magnitude"
 
 	// Natural on-screen length per arrow, in the data transform's pixel space.
 	screen_len := make([]f64, len(arrows), context.temp_allocator)
@@ -275,12 +312,13 @@ plot_quiver :: proc(
 		// Scale the natural direction so the arrow is `len_px` long on screen.
 		head = rl.Vector2{tail.x + f32(ux * len_px), tail.y + f32(uy * len_px)}
 
+		color_value := math.sqrt(a.u * a.u + a.v * a.v)
+		if use_color_column {
+			color_value = color_values[i]
+		}
 		col := theme.axis_x
-		if mag_ok {
-			m := math.sqrt(a.u * a.u + a.v * a.v)
-			if !math.is_nan(m) {
-				col = hue_lookup(mag_lo, mag_hi, m, theme.axis_x, theme.axis_z)
-			}
+		if color_ok && !math.is_nan(color_value) {
+			col = hue_lookup(color_lo, color_hi, color_value, theme.axis_x, theme.axis_z)
 		}
 
 		rl.DrawLineEx(tail, head, line_w, col)
@@ -289,9 +327,23 @@ plot_quiver :: proc(
 		if head_px < 4 {
 			head_px = 4
 		}
+
 		b1, b2 := quiver2d_head_barbs({f64(head.x), f64(head.y)}, {ux, uy}, head_px, QUIVER_HEAD_ANGLE)
 		rl.DrawLineEx(head, rl.Vector2{f32(b1.x), f32(b1.y)}, line_w, col)
 		rl.DrawLineEx(head, rl.Vector2{f32(b2.x), f32(b2.y)}, line_w, col)
+	}
+
+	if color_ok {
+		draw_plot_colorbar(
+			rect,
+			plot_area,
+			color_lo,
+			color_hi,
+			color_label_text,
+			theme,
+			font_size,
+			sc,
+		)
 	}
 
 	// Hover tooltip: nearest arrow tail within a screen threshold.
@@ -317,12 +369,13 @@ plot_quiver :: proc(
 		if best_idx >= 0 && best_dist < f64(14 * sc) {
 			a := arrows[best_idx]
 			pt := to_screen(plot_area, x_min, y_min, x_range, y_range, a.x, a.y)
+			color_value := math.sqrt(a.u * a.u + a.v * a.v)
+			if use_color_column {
+				color_value = color_values[best_idx]
+			}
 			col := theme.axis_x
-			if mag_ok {
-				m := math.sqrt(a.u * a.u + a.v * a.v)
-				if !math.is_nan(m) {
-					col = hue_lookup(mag_lo, mag_hi, m, theme.axis_x, theme.axis_z)
-				}
+			if color_ok && !math.is_nan(color_value) {
+				col = hue_lookup(color_lo, color_hi, color_value, theme.axis_x, theme.axis_z)
 			}
 			rl.DrawCircleLines(i32(pt.x), i32(pt.y), 6 * sc, theme.text)
 			rl.DrawCircle(i32(pt.x), i32(pt.y), 2 * sc, col)
@@ -330,7 +383,7 @@ plot_quiver :: proc(
 			lines := [3]string{}
 			lines[0] = fmt.tprintf("x=%.4f  y=%.4f", a.x, a.y)
 			lines[1] = fmt.tprintf("u=%.4g  v=%.4g", a.u, a.v)
-			lines[2] = fmt.tprintf("|v|=%.4g", math.sqrt(a.u * a.u + a.v * a.v))
+			lines[2] = fmt.tprintf("%s=%.4g", color_label_text, color_value)
 			draw_tooltip(mouse, plot_area, lines[:], theme, font_size, sc)
 		}
 	}
@@ -348,6 +401,8 @@ plot_quiver :: proc(
 			font_size,
 			sc,
 			scale,
+			color_values,
+			color_label_text,
 		)
 	}
 

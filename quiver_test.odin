@@ -226,3 +226,19 @@ test_quiver_magnitude_domain :: proc(t: ^testing.T) {
 	lo2, hi2, ok2 := quiver2d_magnitude_range([]Quiver2D{{u = 0, v = 2}, {u = 2, v = 0}})
 	testing.expect(t, ok2 && lo2 == 2 && hi2 == 3, "degenerate domain expanded")
 }
+
+@(test)
+test_quiver_color_domain :: proc(t: ^testing.T) {
+	arrows := []Quiver2D {
+		{x = 0, y = 0, u = 1, v = 1},
+		{x = 1, y = 1, u = 2, v = 2},
+		{x = 2, y = 2, u = f64_nan(), v = 2},
+	}
+	lo, hi, ok := quiver2d_color_range(arrows, []f64{10, 30, 50})
+	testing.expect(t, ok && lo == 10 && hi == 30, "column color domain ignores invalid arrows")
+
+	lo2, hi2, ok2 := quiver2d_color_range(arrows[:2], []f64{7, 7})
+	testing.expect(t, ok2 && lo2 == 7 && hi2 == 8, "degenerate column color domain expands")
+	_, _, ok3 := quiver2d_color_range(arrows[:2], []f64{7})
+	testing.expect(t, !ok3, "misaligned color values are rejected")
+}

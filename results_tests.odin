@@ -18,6 +18,32 @@ YGG_RESULTS_DIR :: "/home/nick/yggdrasil/results"
 global_app_test_mutex: sync.Mutex
 
 @(test)
+test_default_plot_selection :: proc(t: ^testing.T) {
+	settings := default_settings()
+	testing.expect(t, settings.plot_id == PLOT_SCATTER, "new settings should default to a 2D scatter plot")
+
+	saved_settings := default_settings()
+	saved_settings.plot_id = PLOT_HIST
+	data, marshal_err := json.marshal(saved_settings)
+	testing.expect(t, marshal_err == nil, "could not serialize saved plot choice")
+	if marshal_err == nil {
+		defer delete(data)
+		restored_settings := default_settings()
+		unmarshal_err := json.unmarshal(data, &restored_settings)
+		testing.expect(
+			t,
+			unmarshal_err == nil && restored_settings.plot_id == PLOT_HIST,
+			"saved plot choice should override the fresh default",
+		)
+	}
+
+	app: App
+	results_init(&app)
+	defer results_destroy(&app)
+	testing.expect(t, app.results.plot.id == PLOT_SCATTER, "new results state should default to a 2D scatter plot")
+}
+
+@(test)
 test_load_csv_generic :: proc(t: ^testing.T) {
 	path := YGG_RESULTS_DIR + "/test_parse_csv_generic.csv"
 	ds, ok := load_csv_dataset(path, "test")

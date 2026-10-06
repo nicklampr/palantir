@@ -234,6 +234,8 @@ plot_export_quiver :: proc(
 	font_size: i32,
 	sc: f32,
 	scale: f32,
+	color_values: []f64,
+	color_label: string,
 ) -> bool {
 	path := plot_export_path(app, title)
 	rt, ok := plot_export_begin(app, c.int(rect.width), c.int(rect.height))
@@ -252,6 +254,9 @@ plot_export_quiver :: proc(
 		font_size,
 		sc,
 		scale,
+		nil,
+		color_values,
+		color_label,
 	)
 	rl.EndTextureMode()
 

@@ -146,6 +146,7 @@ default_settings :: proc() -> App_Settings {
 		window_width = cfg.width,
 		window_height = cfg.height,
 		ui_scale_zoom = 1,
+		plot_id = PLOT_SCATTER,
 	}
 }
 

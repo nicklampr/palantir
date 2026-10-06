@@ -151,7 +151,7 @@ results_init :: proc(app: ^App) {
 	rs.active_ds = -1
 	rs.file_cursor = 0
 	rs.plot = Results_Plot {
-		id      = PLOT_MAP,
+		id      = PLOT_SCATTER,
 		x_col   = -1,
 		y_col   = -1,
 		z_col   = -1,
@@ -1831,6 +1831,12 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 					if len(xs) == 0 {
 						draw_empty_plot(plot_rect, "No data", t, sc)
 					} else {
+						color_name := results_col_name(app, rs.plot.h_col)
+						color_values := ds_quiver_vals(
+							ds,
+							ds_column(ds, color_name),
+							MAX_PLOT_POINTS,
+						)
 						plot_quiver(
 							app,
 							xs,
@@ -1846,6 +1852,8 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 							sc,
 							rs.quiver_scale,
 							&rs.quiver_scale,
+							color_values,
+							color_name,
 						)
 					}
 				}
@@ -1945,6 +1953,7 @@ draw_dropdown_row :: proc(
 	names: []string,
 	theme: Theme,
 	sc: f32,
+	unset_label: string = "auto",
 ) {
 	n := min(len(labels), len(sels), len(opens), len(scrolls))
 	if n == 0 {
@@ -1954,7 +1963,18 @@ draw_dropdown_row :: proc(
 	item_w := (rect.width - f32(n - 1) * gap) / f32(n)
 	for i in 0 ..< n {
 		r := rl.Rectangle{rect.x + f32(i) * (item_w + gap), rect.y, item_w, rect.height}
-		draw_dropdown(app, r, labels[i], names, sels[i], opens[i], scrolls[i], theme, sc)
+		draw_dropdown(
+			app,
+			r,
+			labels[i],
+			names,
+			sels[i],
+			opens[i],
+			scrolls[i],
+			theme,
+			sc,
+			unset_label,
+		)
 	}
 }
 
@@ -2048,13 +2068,14 @@ draw_plot_config :: proc(app: ^App, rect: rl.Rectangle) {
 		draw_dropdown_row(
 			app,
 			rect,
-			{"X", "Y", "U", "V"},
-			{&rs.plot.x_col, &rs.plot.y_col, &rs.plot.u_col, &rs.plot.v_col},
-			{&rs.plot.x_open, &rs.plot.y_open, &rs.plot.u_open, &rs.plot.v_open},
-			{&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.u_scroll, &rs.plot.v_scroll},
+			{"X", "Y", "U", "V", "Color"},
+			{&rs.plot.x_col, &rs.plot.y_col, &rs.plot.u_col, &rs.plot.v_col, &rs.plot.h_col},
+			{&rs.plot.x_open, &rs.plot.y_open, &rs.plot.u_open, &rs.plot.v_open, &rs.plot.h_open},
+			{&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.u_scroll, &rs.plot.v_scroll, &rs.plot.h_scroll},
 			names,
 			t,
 			sc,
+			"Magnitude",
 		)
 	case PLOT_QUIVER3D:
 		// Positions on the first row, vector components on the second.
@@ -2149,6 +2170,7 @@ draw_dropdown :: proc(
 	scroll: ^int,
 	theme: Theme,
 	sc: f32,
+	unset_label: string = "auto",
 ) {
 	// Clamp stale selections.
 	if sel^ >= len(names) {
@@ -2169,7 +2191,7 @@ draw_dropdown :: proc(
 	if sel^ >= 0 && sel^ < len(names) {
 		cur_text = names[sel^]
 	} else {
-		cur_text = "auto"
+		cur_text = unset_label
 	}
 	txt := fmt.tprintf("%s: %s", label, cur_text)
 	txt_c := strings.clone_to_cstring(txt, context.temp_allocator)
@@ -2969,4 +2991,3 @@ draw_text_input :: proc(
 	}
 	return false
 }
-
