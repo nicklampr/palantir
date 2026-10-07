@@ -2,7 +2,7 @@ package palantir
 
 // Results explorer view: browse a folder for .csv/.json files, multi-select
 // them, choose one of the available plots (Map / Line / Scatter /
-// Histogram / 2D histogram / Mesh / 2D & 3D quiver), and inspect the raw data
+// Histograms / Mesh / Quiver / 3D Wireframe / Contour), and inspect the raw data
 // in a virtualized table that only renders the rows that are actually visible.
 
 import "core:c"
@@ -31,6 +31,8 @@ PLOT_MESH3D :: 5
 PLOT_QUIVER :: 6
 PLOT_QUIVER3D :: 7
 PLOT_POLAR :: 8
+PLOT_WIREFRAME3D :: 9
+PLOT_CONTOUR :: 10
 
 Plot_Zoom_State :: struct {
 	initialized: bool,
@@ -87,6 +89,8 @@ Results_Plot :: struct {
 	plot_open:                                                                                    bool,
 	prev_id:                                                                                      int, // plot id of the previous frame (for one-shot camera fits)
 	bins:                                                                                         int, // histogram bin count (0 = auto)
+	contour_levels:                                                                              int,
+	contour_levels_edit:                                                                         bool,
 }
 
 // The nine column-selection slots, keyed by name rather than index. This is
@@ -134,10 +138,10 @@ Results_State :: struct {
 	// keyboard navigation can't also act on that same keypress.
 	text_enter:        bool,
 	plot:              Results_Plot,
-	plot_zoom:         [PLOT_POLAR + 1]Plot_Zoom_State,
+	plot_zoom:         [PLOT_CONTOUR + 1]Plot_Zoom_State,
 	map_view:          Map_View,
 	map_bg:            Map_Background,
-	map_bg_init:       bool,
+	map_bg_attempted: bool,
 	msg:               string,
 	// 3D mesh viewer state (see mesh.odin / mesh_view.odin).
 	mesh:              ^Mesh_Dataset,
@@ -147,6 +151,12 @@ Results_State :: struct {
 	mesh_shader:       rl.Shader,
 	// 3D quiver fly camera / offscreen target (same Mesh_View machinery).
 	quiver_view:       Mesh_View,
+	// 3D wireframe fly camera / offscreen target.
+	wireframe_view:    Mesh_View,
+	wireframe_src:     ^Dataset,
+	wireframe_x_col,
+	wireframe_y_col,
+	wireframe_z_col:   int,
 	// Arrow-size multiplier for the 2D / 3D quiver widgets (see quiver.odin).
 	quiver_scale:      f32,
 	// Remembered column names (persisted in settings); applied to the plot
@@ -174,6 +184,7 @@ results_init :: proc(app: ^App) {
 		w_col   = -1,
 		lat_col = -1,
 		lon_col = -1,
+		contour_levels = CONTOUR_LEVEL_COUNT,
 	}
 	rs.map_view = Map_View {
 		center_lon = 0,
@@ -184,6 +195,10 @@ results_init :: proc(app: ^App) {
 	rs.show_bottom_panel = true
 	rs.mesh_view = mesh_view_init()
 	rs.quiver_view = mesh_view_init()
+	rs.wireframe_view = mesh_view_init()
+	rs.wireframe_x_col = -1
+	rs.wireframe_y_col = -1
+	rs.wireframe_z_col = -1
 	rs.quiver_scale = 1.0
 	rs.remembered = {}
 	rs.applied_to_ds = nil
@@ -221,6 +236,7 @@ results_destroy :: proc(app: ^App) {
 	results_destroy_mesh(app)
 	mesh_view_unload(&rs.mesh_view)
 	mesh_view_unload(&rs.quiver_view)
+	mesh_view_unload(&rs.wireframe_view)
 	if rs.mesh_shader.id != 0 {
 		rl.UnloadShader(rs.mesh_shader)
 		rs.mesh_shader = {}
@@ -840,7 +856,7 @@ open_results_folder :: proc(app: ^App) {
 	cwd, _ := os.get_working_directory(context.temp_allocator)
 	results_set_root(app, cwd)
 	app.results.show_recents = false
-	app.results.map_bg_init = false
+	app.results.map_bg_attempted = false
 }
 
 open_recents_view :: proc(app: ^App) {
@@ -914,6 +930,8 @@ results_refresh_changed :: proc(app: ^App) -> bool {
 		results_destroy_mesh(app)
 	}
 	if changed {
+		rs.wireframe_src = nil
+		rs.wireframe_view.fit = true
 		// The reloaded dataset has fresh columns; re-resolve remembered names.
 		if ds := active_dataset(rs); ds != nil && rawptr(ds) != rs.applied_to_ds {
 			results_apply_remembered(app)
@@ -949,8 +967,8 @@ results_refresh :: proc(app: ^App) {
 
 // Global keyboard shortcuts for the results explorer (ignored while the
 // command palette is open). Ctrl+F focuses search, Ctrl+R refreshes,
-// Ctrl+L/Ctrl+B toggle the left/bottom panels, and Ctrl+1..8 switch
-// the active plot type.
+// Ctrl+L/Ctrl+B toggle the left/bottom panels, and Ctrl+1..9 switch
+// the existing plot types.
 results_handle_shortcuts :: proc(app: ^App) {
 	if app.palette.open {
 		return
@@ -1572,54 +1590,77 @@ PLOT_NAMES := [?]string {
 	"Quiver",
 	"3D Quiver",
 	"Polar",
+	"3D Wireframe",
+	"Contour",
 }
 
 draw_plot_selector :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32) {
 	rs := &app.results
-	n := len(PLOT_NAMES)
-	radius := UI_RADIUS_SM * sc
-	draw_fill_rounded(rect, theme.window_bg, radius)
-	draw_stroke_rounded(rect, theme.border, radius, 1)
+	if app.palette.open {
+		rs.plot.plot_open = false
+	}
 
-	item_w := rect.width / f32(n)
-	mouse := rl.GetMousePosition()
-	inset := 3 * sc
-	for i in 0 ..< n {
-		item := rl.Rectangle{rect.x + f32(i) * item_w, rect.y, item_w, rect.height}
-		hover := rl.CheckCollisionPointRec(mouse, item) && !app.palette.open
-		if i == rs.plot.id {
-			pill := rl.Rectangle {
-				item.x + inset,
-				item.y + inset,
-				item.width - 2 * inset,
-				item.height - 2 * inset,
-			}
-			draw_fill_rounded(pill, theme.accent, radius - 1)
-		} else if hover {
-			pill := rl.Rectangle {
-				item.x + inset,
-				item.y + inset,
-				item.width - 2 * inset,
-				item.height - 2 * inset,
-			}
-			draw_fill_rounded(pill, theme.hover, radius - 1)
+	options := make([dynamic]u8, 0, 128, context.temp_allocator)
+	for name, i in PLOT_NAMES {
+		if i > 0 {append(&options, ';')}
+		append(&options, name)
+	}
+	options_c := strings.clone_to_cstring(string(options[:]), context.temp_allocator)
+	active := c.int(clamp(rs.plot.id, 0, len(PLOT_NAMES) - 1))
+
+	// raygui keeps a process-global style. Save and restore the dropdown colors
+	// so this control follows the selected Palantir theme without changing
+	// unrelated raygui widgets.
+	props := [?]c.int {
+		c.int(rl.GuiControlProperty.BORDER_COLOR_NORMAL),
+		c.int(rl.GuiControlProperty.BASE_COLOR_NORMAL),
+		c.int(rl.GuiControlProperty.TEXT_COLOR_NORMAL),
+		c.int(rl.GuiControlProperty.BORDER_COLOR_FOCUSED),
+		c.int(rl.GuiControlProperty.BASE_COLOR_FOCUSED),
+		c.int(rl.GuiControlProperty.TEXT_COLOR_FOCUSED),
+		c.int(rl.GuiControlProperty.BORDER_COLOR_PRESSED),
+		c.int(rl.GuiControlProperty.BASE_COLOR_PRESSED),
+		c.int(rl.GuiControlProperty.TEXT_COLOR_PRESSED),
+	}
+	colors := [?]c.uint {
+		rl.ColorToInt(theme.border),
+		rl.ColorToInt(theme.window_bg),
+		rl.ColorToInt(theme.text),
+		rl.ColorToInt(theme.accent),
+		rl.ColorToInt(theme.hover),
+		rl.ColorToInt(theme.text),
+		rl.ColorToInt(theme.accent),
+		rl.ColorToInt(theme.accent),
+		rl.ColorToInt(theme.accent_text),
+	}
+	old := [len(props)]c.int{}
+	for i in 0 ..< len(props) {
+		old[i] = rl.GuiGetStyle(.DROPDOWNBOX, props[i])
+		rl.GuiSetStyle(.DROPDOWNBOX, props[i], c.int(colors[i]))
+	}
+	text_size_prop := c.int(rl.GuiDefaultProperty.TEXT_SIZE)
+	old_text_size := rl.GuiGetStyle(.DEFAULT, text_size_prop)
+	rl.GuiSetStyle(.DEFAULT, text_size_prop, c.int(max(10, i32(12 * sc))))
+
+	if app.palette.open {
+		rl.GuiLock()
+	}
+	changed := rl.GuiDropdownBox(rect, options_c, &active, rs.plot.plot_open)
+	if app.palette.open {
+		rl.GuiUnlock()
+	}
+	rl.GuiSetStyle(.DEFAULT, text_size_prop, old_text_size)
+	for i in 0 ..< len(props) {
+		rl.GuiSetStyle(.DROPDOWNBOX, props[i], old[i])
+	}
+
+	rs.plot.id = int(active)
+	if changed {
+		rs.plot.plot_open = !rs.plot.plot_open
+		if rs.plot.id != PLOT_CONTOUR {
+			rs.plot.contour_levels_edit = false
 		}
-		col := theme.accent_text if i == rs.plot.id else theme.text
-		name_c := strings.clone_to_cstring(PLOT_NAMES[i], context.temp_allocator)
-		fs := i32(12 * sc)
-		tw := f32(measure_text(name_c, fs))
-		draw_text(
-			name_c,
-			c.int(item.x + (item.width - tw) * 0.5),
-			c.int(item.y + (item.height - f32(fs)) * 0.5),
-			fs,
-			col,
-		)
-		if hover && rl.IsMouseButtonReleased(.LEFT) {
-			rs.plot.id = i
-			rs.plot.plot_open = false
-			results_close_column_popups(&app.results)
-		}
+		results_close_column_popups(rs)
 	}
 }
 
@@ -1632,6 +1673,15 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 	t := app.themes[app.theme_index]
 	sc := app.ui_scale
 	rs := &app.results
+
+	// The map texture is a large derived cache. Release it when the map is
+	// hidden or there is no dataset to draw, rather than retaining it until exit.
+	if rs.plot.id != PLOT_MAP || len(rs.datasets) == 0 {
+		if rs.map_bg.tex.id != 0 {
+			destroy_map_background(&rs.map_bg)
+		}
+		rs.map_bg_attempted = false
+	}
 
 	draw_panel(panel, t, sc, true)
 	inset := 10 * sc
@@ -1666,8 +1716,9 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 		// Draw the plot first so the config row (with its popups) stays on top.
 		switch rs.plot.id {
 		case PLOT_MAP:
-			if !rs.map_bg_init {
-				rs.map_bg_init = load_map_background(&rs.map_bg)
+			if !rs.map_bg_attempted {
+				_ = load_map_background(&rs.map_bg)
+				rs.map_bg_attempted = true
 			}
 			if rs.map_view.lon_span == 0 {
 				rs.map_view = Map_View {
@@ -1872,6 +1923,77 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 				}
 			}
 
+		case PLOT_WIREFRAME3D:
+			ds := active_dataset(rs)
+			if ds == nil {
+				draw_empty_plot(plot_rect, "Select a data file to plot", t, sc)
+			} else {
+				x_name := results_col_name(app, rs.plot.x_col)
+				y_name := results_col_name(app, rs.plot.y_col)
+				z_name := results_col_name(app, rs.plot.z_col)
+				if x_name == "" || y_name == "" || z_name == "" {
+					draw_empty_plot(plot_rect, "Pick X, Y and Z columns", t, sc)
+				} else {
+					grid := scalar_grid_from_arrays(
+						ds_column(ds, x_name).floats,
+						ds_column(ds, y_name).floats,
+						ds_column(ds, z_name).floats,
+					)
+					if len(grid.x) < 2 || len(grid.y) < 2 {
+						draw_empty_plot(plot_rect, "X, Y and Z must describe a rectangular grid", t, sc)
+					} else {
+						if rs.plot.prev_id != PLOT_WIREFRAME3D ||
+						   rs.wireframe_src != ds ||
+						   rs.wireframe_x_col != rs.plot.x_col ||
+						   rs.wireframe_y_col != rs.plot.y_col ||
+						   rs.wireframe_z_col != rs.plot.z_col {
+							rs.wireframe_view.fit = true
+						}
+						rs.wireframe_src = ds
+						rs.wireframe_x_col = rs.plot.x_col
+						rs.wireframe_y_col = rs.plot.y_col
+						rs.wireframe_z_col = rs.plot.z_col
+						draw_wireframe_view(
+							app,
+							grid,
+							"3D wireframe",
+							plot_rect,
+							t,
+							sc,
+						)
+					}
+				}
+			}
+
+		case PLOT_CONTOUR:
+			ds := active_dataset(rs)
+			if ds == nil {
+				draw_empty_plot(plot_rect, "Select a data file to plot", t, sc)
+			} else {
+				x_name := results_col_name(app, rs.plot.x_col)
+				y_name := results_col_name(app, rs.plot.y_col)
+				z_name := results_col_name(app, rs.plot.z_col)
+				if x_name == "" || y_name == "" || z_name == "" {
+					draw_empty_plot(plot_rect, "Pick X, Y and Z columns", t, sc)
+				} else {
+					plot_contour(
+						app,
+						ds_column(ds, x_name).floats,
+						ds_column(ds, y_name).floats,
+						ds_column(ds, z_name).floats,
+						"Contour plot",
+						x_name,
+						y_name,
+						z_name,
+						plot_rect,
+						t,
+						fs,
+						sc,
+						rs.plot.contour_levels,
+					)
+				}
+			}
+
 		case PLOT_QUIVER3D:
 			ds := active_dataset(rs)
 			if ds == nil {
@@ -1991,11 +2113,84 @@ draw_dropdown_row :: proc(
 	}
 }
 
+// Editable raygui spinner for the number of contour intervals. Clicking the
+// value enters text-edit mode; the side buttons also step the count.
+draw_contour_levels_spinner :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32) {
+	rs := &app.results
+	value := c.int(clamp(rs.plot.contour_levels, CONTOUR_LEVEL_MIN, CONTOUR_LEVEL_MAX))
+	controls := [?]rl.GuiControl{.SPINNER, .VALUEBOX, .BUTTON}
+	props := [?]c.int {
+		c.int(rl.GuiControlProperty.BORDER_COLOR_NORMAL),
+		c.int(rl.GuiControlProperty.BASE_COLOR_NORMAL),
+		c.int(rl.GuiControlProperty.TEXT_COLOR_NORMAL),
+		c.int(rl.GuiControlProperty.BORDER_COLOR_FOCUSED),
+		c.int(rl.GuiControlProperty.BASE_COLOR_FOCUSED),
+		c.int(rl.GuiControlProperty.TEXT_COLOR_FOCUSED),
+		c.int(rl.GuiControlProperty.BORDER_COLOR_PRESSED),
+		c.int(rl.GuiControlProperty.BASE_COLOR_PRESSED),
+		c.int(rl.GuiControlProperty.TEXT_COLOR_PRESSED),
+	}
+	colors := [?]c.uint {
+		rl.ColorToInt(theme.border),
+		rl.ColorToInt(theme.window_bg),
+		rl.ColorToInt(theme.text),
+		rl.ColorToInt(theme.accent),
+		rl.ColorToInt(theme.hover),
+		rl.ColorToInt(theme.text),
+		rl.ColorToInt(theme.accent),
+		rl.ColorToInt(theme.accent),
+		rl.ColorToInt(theme.accent_text),
+	}
+	old := [len(controls)][len(props)]c.int{}
+	for control, ci in controls {
+		for prop, pi in props {
+			old[ci][pi] = rl.GuiGetStyle(control, prop)
+			rl.GuiSetStyle(control, prop, c.int(colors[pi]))
+		}
+	}
+	text_size_prop := c.int(rl.GuiDefaultProperty.TEXT_SIZE)
+	old_text_size := rl.GuiGetStyle(.DEFAULT, text_size_prop)
+	rl.GuiSetStyle(.DEFAULT, text_size_prop, c.int(max(10, i32(12 * sc))))
+
+	if app.palette.open {
+		rl.GuiLock()
+	}
+	changed := rl.GuiSpinner(
+		rect,
+		"Levels",
+		&value,
+		c.int(CONTOUR_LEVEL_MIN),
+		c.int(CONTOUR_LEVEL_MAX),
+		rs.plot.contour_levels_edit,
+	)
+	if app.palette.open {
+		rl.GuiUnlock()
+	}
+
+	rl.GuiSetStyle(.DEFAULT, text_size_prop, old_text_size)
+	for control, ci in controls {
+		for prop, pi in props {
+			rl.GuiSetStyle(control, prop, old[ci][pi])
+		}
+	}
+	if changed != 0 {
+		rs.plot.contour_levels_edit = !rs.plot.contour_levels_edit
+	}
+	rs.plot.contour_levels = int(clamp(value, c.int(CONTOUR_LEVEL_MIN), c.int(CONTOUR_LEVEL_MAX)))
+}
+
 // Draws the column-selection dropdowns for the active plot.
 draw_plot_config :: proc(app: ^App, rect: rl.Rectangle) {
 	t := app.themes[app.theme_index]
 	sc := app.ui_scale
 	rs := &app.results
+
+	// The plot selector is rendered after this config row, and its raygui popup
+	// overlaps it. Give the selector exclusive interaction while it is open so
+	// clicks on a plot item cannot activate an underlying X/Y/Z dropdown.
+	if rs.plot.plot_open {
+		return
+	}
 
 	names := ds_column_names(active_dataset(rs))
 	if rs.plot.id == PLOT_MESH3D {
@@ -2090,6 +2285,36 @@ draw_plot_config :: proc(app: ^App, rect: rl.Rectangle) {
 			sc,
 			"Magnitude",
 		)
+	case PLOT_WIREFRAME3D:
+		draw_dropdown_row(
+			app,
+			rect,
+			{"X", "Y", "Z"},
+			{&rs.plot.x_col, &rs.plot.y_col, &rs.plot.z_col},
+			{&rs.plot.x_open, &rs.plot.y_open, &rs.plot.z_open},
+			{&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.z_scroll},
+			names,
+			t,
+			sc,
+		)
+	case PLOT_CONTOUR:
+		levels_w := min(132 * sc, rect.width * 0.34)
+		gap := 8 * sc
+		columns_rect := rect
+		columns_rect.width = max(rect.width - levels_w - gap, 0)
+		draw_dropdown_row(
+			app,
+			columns_rect,
+			{"X", "Y", "Z"},
+			{&rs.plot.x_col, &rs.plot.y_col, &rs.plot.z_col},
+			{&rs.plot.x_open, &rs.plot.y_open, &rs.plot.z_open},
+			{&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.z_scroll},
+			names,
+			t,
+			sc,
+		)
+		levels_rect := rl.Rectangle{rect.x + columns_rect.width + gap, rect.y, levels_w, rect.height}
+		draw_contour_levels_spinner(app, levels_rect, t, sc)
 	case PLOT_QUIVER3D:
 		// Positions on the first row, vector components on the second.
 		row2 := rl.Rectangle{rect.x, rect.y + 34 * sc + 8 * sc, rect.width, 34 * sc}

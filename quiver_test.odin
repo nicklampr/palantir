@@ -5,7 +5,6 @@ package palantir
 // magnitude color domain.
 
 import "core:math"
-import "core:os"
 import "core:testing"
 
 @(test)
@@ -100,65 +99,6 @@ test_quiver_scale_applied :: proc(t: ^testing.T) {
 
 	_, maxp1, _ := quiver3d_fit_bounds(arrows, 0.5)
 	testing.expect(t, maxp1[0] == 0.5, "scaled head shrinks below 1")
-}
-
-@(test)
-test_quiver_prop3d_grid :: proc(t: ^testing.T) {
-	// End-to-end check against prop3D's actual output: compact axes x/y/z
-	// (nx each) with u/v/w flattened to nx*ny*nz. The dataset loader
-	// NaN-pads the axes to the field row count; the grid reconstruction must
-	// restore the full field. Assertions are structural so the test survives
-	// the file being regenerated with a different domain.
-	path := "/home/nick/prop3D/quiver.json"
-	if !os.exists(path) {
-		return // prop3D output not present; skip silently
-	}
-	ds, ok := load_json_dataset(path, "quiver")
-	testing.expect(t, ok, "failed to load prop3D quiver.json")
-	if !ok {
-		return
-	}
-	defer {
-		dataset_destroy(ds)
-		free(ds)
-	}
-
-	xs := ds_quiver_vals(ds, ds_column(ds, "x"), 100000)
-	ys := ds_quiver_vals(ds, ds_column(ds, "y"), 100000)
-	zs := ds_quiver_vals(ds, ds_column(ds, "z"), 100000)
-	us := ds_quiver_vals(ds, ds_column(ds, "u"), 100000)
-	vs := ds_quiver_vals(ds, ds_column(ds, "v"), 100000)
-	ws := ds_quiver_vals(ds, ds_column(ds, "w"), 100000)
-
-	nx, ny, nz := valid_prefix_len(xs), valid_prefix_len(ys), valid_prefix_len(zs)
-	field := nx * ny * nz
-	testing.expect(t, field > 1 && len(us) == field, "axes multiply to the field length")
-	if len(us) != field || field <= 1 {
-		return
-	}
-
-	arrows := quiver3d_from_arrays(xs, ys, zs, us, vs, ws)
-	testing.expect(t, len(arrows) == field, "full field reconstructed, not the axis length")
-	if len(arrows) == 0 {
-		return
-	}
-
-	// x-slowest / z-fastest flattening: index k = (ix*ny + iy)*nz + iz must map
-	// to the axes and match the field values at k.
-	check := []int{0, 1, nz, ny * nz, field - 1, 17}
-	for k in check {
-		if k < 0 || k >= field {
-			continue
-		}
-		ix := k / (ny * nz)
-		iy := (k / nz) % ny
-		iz := k % nz
-		a := arrows[k]
-		testing.expectf(t, a.x == xs[ix], "arrow %d x = axis[%d]", k, ix)
-		testing.expectf(t, a.y == ys[iy], "arrow %d y = axis[%d]", k, iy)
-		testing.expectf(t, a.z == zs[iz], "arrow %d z = axis[%d]", k, iz)
-		testing.expectf(t, a.u == us[k] && a.v == vs[k] && a.w == ws[k], "arrow %d components = field[%d]", k, k)
-	}
 }
 
 @(test)

@@ -4,10 +4,10 @@ package palantir
 // Natural Earth II raster background and one or more routes drawn from
 // []PerformanceResult with hover tooltips and a legend.
 //
-// The raster is embedded at compile time via `#load` (an equirectangular PNG,
-// re-projected to Web Mercator once on first use) and drawn as a single
-// full-resolution texture with GPU mipmaps, so the sharpest available detail is
-// shown at every zoom. The projection and pan/zoom state live in `Map_View` so
+// The compressed equirectangular PNG is embedded in the executable, but only
+// decoded/re-projected when the map plot is first shown. The large derived
+// texture is released whenever the map plot is hidden. The projection and
+// pan/zoom state live in `Map_View` so
 // the map can later host weather overlays.
 //
 // Adapted from yggdrasil/earth_map.odin; the data model here is palantir's own
@@ -22,12 +22,13 @@ import "core:testing"
 import "core:thread"
 import "core:time"
 import rl "vendor:raylib"
+import rlgl "vendor:raylib/rlgl"
 
 MAP_ZOOM_MIN :: 1.0 // min lon span in degrees (max zoom-in)
 MAP_ZOOM_MAX :: 360.0 // max lon span (whole world)
 
 // Equirectangular (8192x4096) Natural Earth II shaded-relief + water image.
-// PNG is used because this raylib build has no JPEG/TIFF decoder.
+// The compressed bytes live in the binary; decoding and GPU upload stay lazy.
 EARTH_BG_PNG := #load("ne_earth_bg.png")
 
 // Square Web-Mercator background texture size (covers lat ±85.05).
@@ -270,9 +271,12 @@ load_map_background :: proc(out: ^Map_Background) -> bool {
 	if img.data == nil {
 		return false
 	}
-	defer rl.UnloadImage(img)
+	sw, sh := f32(img.width), f32(img.height)
 
-	src := rl.LoadImageColors(img) // flat RGBA copy, any source format
+	// Own a separate RGBA array for the worker threads. Once copied, release
+	// Image's decoded buffer before allocating the much larger output raster.
+	src := rl.LoadImageColors(img)
+	rl.UnloadImage(img)
 	if src == nil {
 		return false
 	}
@@ -282,8 +286,6 @@ load_map_background :: proc(out: ^Map_Background) -> bool {
 	defer rl.UnloadImage(master)
 	dst := ([^]rl.Color)(master.data)
 
-	sw := f32(img.width)
-	sh := f32(img.height)
 	xstep := (sw - 1) / f32(MAP_BG_SIZE - 1)
 
 	rows_per_thread := MAP_BG_SIZE / BG_REPRO_THREADS
@@ -326,6 +328,9 @@ load_map_background :: proc(out: ^Map_Background) -> bool {
 
 destroy_map_background :: proc(bg: ^Map_Background) {
 	if bg.tex.id != 0 {
+		// Flush queued quads that may still reference this texture before
+		// releasing its GPU storage.
+		rlgl.DrawRenderBatchActive()
 		rl.UnloadTexture(bg.tex)
 		bg.tex = rl.Texture2D{}
 	}

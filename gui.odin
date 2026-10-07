@@ -311,12 +311,29 @@ run :: proc() {
 }
 
 app_run :: proc(app: ^App, config := App_Config{}) {
+	app_run_with_options(app, config, CLI_Options{plot_id = -1, levels = CONTOUR_LEVEL_COUNT})
+}
+
+// GUI entry point used by the CLI as well as the normal app run. CLI options
+// are applied after initialization so they override persisted plot settings.
+app_run_with_options :: proc(app: ^App, config: App_Config, options: CLI_Options) {
 	cfg := config if config.title != nil else default_config()
 	app_init(app, cfg)
 	defer app_shutdown(app)
+	cli_apply_options(app, options)
 
+	frames := 0
 	for app_should_run(app) {
 		app_update(app)
+		frames += 1
+		if options.switch_after > 0 && frames == options.switch_after {
+			app.results.plot.id = options.then_plot_id
+			app.results.plot.plot_open = false
+			results_close_column_popups(&app.results)
+		}
+		if options.max_frames > 0 && frames >= options.max_frames {
+			app.running = false
+		}
 	}
 }
 

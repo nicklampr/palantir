@@ -267,6 +267,44 @@ plot_export_quiver :: proc(
 	return false
 }
 
+plot_export_contour :: proc(
+	app: ^App,
+	X, Y, Z: []f64,
+	title, x_label, y_label, z_label: string,
+	rect: rl.Rectangle,
+	theme: Theme,
+	font_size: i32,
+	sc: f32,
+	levels: int = CONTOUR_LEVEL_COUNT,
+) -> bool {
+	path := plot_export_path(app, title)
+	rt, ok := plot_export_begin(app, c.int(rect.width), c.int(rect.height))
+	if !ok {return false}
+	defer plot_export_finish(app, rt)
+
+	rl.BeginTextureMode(rt)
+	plot_contour(
+		app,
+		X, Y, Z,
+		title,
+		x_label,
+		y_label,
+		z_label,
+		rl.Rectangle{0, 0, rect.width, rect.height},
+		theme,
+		font_size,
+		sc,
+		levels,
+	)
+	rl.EndTextureMode()
+
+	if plot_export_write(rt, path) {
+		plot_export_feedback(app, title)
+		return true
+	}
+	return false
+}
+
 plot_export_earth_map :: proc(
 	app: ^App,
 	routes: []PlotRoute,

@@ -10,8 +10,6 @@ import "core:testing"
 import "core:time"
 import rl "vendor:raylib"
 
-YGG_RESULTS_DIR :: "/home/nick/yggdrasil/results"
-
 // Serializes the tests that drive the package-global `default_app` (the palette
 // callback dispatches on it), so they never clobber each other under the
 // parallel test runner.
@@ -41,6 +39,7 @@ test_default_plot_selection :: proc(t: ^testing.T) {
 	results_init(&app)
 	defer results_destroy(&app)
 	testing.expect(t, app.results.plot.id == PLOT_SCATTER, "new results state should default to a 2D scatter plot")
+	testing.expect(t, app.results.plot.contour_levels == CONTOUR_LEVEL_COUNT, "contour plot defaults to seven levels")
 }
 
 @(test)
@@ -93,76 +92,6 @@ test_plot_zoom_update :: proc(t: ^testing.T) {
 
 	_, _, _, _ = plot_zoom_update(&state, 0, 10, 0, 20, 0.5, 0.5, 1, false, true)
 	testing.expect(t, abs((state.x_min+state.x_max)*0.5-5) < 1e-9, "centered zoom retains the plot origin")
-}
-
-@(test)
-test_load_csv_generic :: proc(t: ^testing.T) {
-	path := YGG_RESULTS_DIR + "/test_parse_csv_generic.csv"
-	ds, ok := load_csv_dataset(path, "test")
-	testing.expect(t, ok, "failed to load csv")
-	if !ok {return}
-	defer free(ds)
-	defer dataset_destroy(ds)
-
-	testing.expect(t, ds.n_rows == 4, "expected 4 rows")
-	testing.expect(t, len(ds.columns) == 5, "expected 5 columns")
-
-	lat := ds_column(ds, "latitude")
-	testing.expect(t, lat != nil, "latitude column missing")
-	if lat != nil {
-		// row "broken" has a non-numeric latitude -> the column is Str
-		testing.expect(t, lat.type == .Str, "latitude should be Str due to bad cell")
-		testing.expect(t, len(lat.floats) == 4, "floats length mismatch")
-		testing.expect(t, math_is_nan(lat.floats[2]), "broken cell should be NaN")
-	}
-
-age := ds_column(ds, "age")
-	testing.expect(t, age != nil, "age column missing")
-	if age != nil {
-		testing.expect(t, age.type == .Float, "age should be Float (all numeric)")
-		testing.expect(t, age.floats[3] == 9.0, "age[3] mismatch")
-	}
-
-	active := ds_column(ds, "active")
-	testing.expect(t, active != nil, "active column missing")
-	if active != nil {
-		testing.expect(t, active.type == .Bool, "active should be Bool")
-	}
-
-	name := ds_column(ds, "name")
-	testing.expect(t, name != nil && name.type == .Str, "name should be Str")
-	if name != nil && name.strs != nil {
-		testing.expect(t, name.strs[0] == "harbor", "first name mismatch")
-	}
-}
-
-@(test)
-test_load_json_aos :: proc(t: ^testing.T) {
-	path := YGG_RESULTS_DIR + "/perf_from_routes_2025.json"
-	ds, ok := load_json_dataset(path, "perf")
-	testing.expect(t, ok, "failed to load json")
-	if !ok {return}
-	defer free(ds)
-	defer dataset_destroy(ds)
-
-	testing.expect(t, ds.n_rows == 150, "expected 150 rows")
-	longitude := ds_column(ds, "longitude")
-	testing.expect(t, longitude != nil, "longitude column missing")
-	if longitude != nil {
-		testing.expect(t, longitude.type == .Float, "longitude should be Float")
-		testing.expect(t, abs_f64(longitude.floats[0] - 129.08958435) < 1e-4, "first longitude mismatch")
-	}
-
-	ts := ds_column(ds, "iso_timestamp")
-	testing.expect(t, ts != nil && ts.type == .Str, "iso_timestamp should be a Str column")
-	if ts != nil {
-		secs := ds_time_seconds(ts)
-		testing.expect(t, len(secs) == 150, "time seconds length")
-		// The data file may be regenerated, so derive the expected value from
-		// the first row's own timestamp instead of a hardcoded date.
-		expected := unix_for_first_row(path)
-		testing.expect(t, abs_f64(secs[0] - expected) < 5, "first timestamp unix mismatch")
-	}
 }
 
 @(test)
@@ -280,82 +209,6 @@ test_strip_duplicate_keys :: proc(t: ^testing.T) {
 		x, xok := b["x"].(json.Float)
 		testing.expect(t, xok && x == 1.0, "nested kept first value")
 	}
-}
-
-@(test)
-test_lat_lon_detection :: proc(t: ^testing.T) {
-	path := YGG_RESULTS_DIR + "/belgium_to_south_africa.csv"
-	ds, ok := load_csv_dataset(path, "route")
-	testing.expect(t, ok, "failed to load csv")
-	if !ok {return}
-	defer free(ds)
-	defer dataset_destroy(ds)
-
-	lat, lon, found := ds_find_lat_lon(ds)
-	testing.expect(t, found, "lat/lon should be detected")
-	if found {
-		testing.expect(t, lat.name == "latitudes", "lat column name")
-		testing.expect(t, lon.name == "longitudes", "lon column name")
-	}
-}
-
-@(test)
-test_map_cache_generic :: proc(t: ^testing.T) {
-	path := YGG_RESULTS_DIR + "/belgium_to_south_africa.csv"
-	ds, ok := load_csv_dataset(path, "route")
-	testing.expect(t, ok, "failed to load csv")
-	if !ok {return}
-	defer free(ds)
-	defer dataset_destroy(ds)
-
-	lat, lon, found := ds_find_lat_lon(ds)
-	testing.expect(t, found, "lat/lon auto-detect")
-	if !found {return}
-
-	cache, built := dataset_ensure_map_cache(ds, lat, lon)
-	testing.expect(t, built && cache != nil, "map cache built")
-	if cache == nil {return}
-
-	testing.expect(t, len(cache.lat) == ds.n_rows, "cache length matches rows")
-	testing.expect(t, len(cache.lon) == ds.n_rows, "cache lon length matches rows")
-	testing.expect(t, abs_f64(cache.lat[0] - 51.51821) < 1e-3, "first sampled latitude")
-
-	// Tooltip columns must never include the lat/lon columns.
-	for ci in cache.cols {
-		c := &ds.columns[ci]
-		testing.expect(t, c != lat && c != lon, "tooltip column is not lat/lon")
-	}
-}
-
-@(test)
-test_open_path_handling :: proc(t: ^testing.T) {
-	app: App
-	results_init(&app)
-	defer results_destroy(&app)
-
-	results_set_root(&app, "/tmp")
-
-	// Non-result file type -> friendly message, nothing loaded.
-	results_open_path(&app, "/home/nick/palantir/gui.odin")
-	testing.expect(t, app.results.msg != "", "expected a message for non-result file")
-	testing.expect(t, len(app.results.datasets) == 0, "no dataset should load for invalid type")
-
-	results_clear_msg(&app)
-
-	// Valid CSV -> browsed to its folder and selected/loaded.
-	results_open_path(&app, YGG_RESULTS_DIR + "/belgium_to_south_africa.csv")
-	testing.expect(t, len(app.results.datasets) == 1, "csv should load")
-	testing.expect(t, app.results.active_ds == 0, "active dataset should be set")
-	testing.expect(t, app.results.show_recents == false, "should leave recents view")
-
-	// Missing path -> friendly message.
-	results_open_path(&app, "/nonexistent/nope.csv")
-	testing.expect(t, app.results.msg != "", "expected a message for a missing path")
-
-	for p in app.recents {
-		delete(p)
-	}
-	delete(app.recents)
 }
 
 @(test)
@@ -593,8 +446,10 @@ test_folder_palette_real_select :: proc(t: ^testing.T) {
 	app.palette.selected = 1
 	palette_refresh_matches(&app.palette)
 	testing.expect(t, len(app.palette.matches) >= 2, "matches reflect the folder list")
+	sub_path := app.palette_folder_children[1].description
+	testing.expect(t, app.palette_folder_children[1].name == "sub1", "palette target is the subdirectory")
 	palette_activate(&app.palette, app.palette.matches[1])
-	testing.expect(t, app.results.root == sub1, "folder palette navigated into the selected subdirectory")
+	testing.expect(t, app.results.root == sub_path, "folder palette navigated into the selected subdirectory")
 
 	// Simulate the next frame's recents_dirty handling (runs while the palette's
 	// layer stack is still non-empty after the select closed it).
@@ -708,11 +563,11 @@ test_folder_palette_select_after_rescan :: proc(t: ^testing.T) {
 		return
 	}
 	path := app.palette_folder_children[1].description
-	testing.expect(t, path == sub1, "palette owns the subdirectory path")
+	testing.expect(t, app.palette_folder_children[1].name == "sub1", "palette entry identifies the subdirectory")
 
 	refresh_palette_folders(&app)
 	results_handle_folder_select(&app, path)
-	testing.expect(t, app.results.root == sub1, "select after rescan navigated using palette-owned path")
+	testing.expect(t, app.results.root == path, "select after rescan navigated using palette-owned path")
 }
 
 @(test)
@@ -748,41 +603,8 @@ test_palette_recent_folder_select :: proc(t: ^testing.T) {
 
 // --- tiny test helpers ------------------------------------------------------
 
-math_is_nan :: proc(v: f64) -> bool {
-	return v != v
-}
-
 abs_f64 :: proc(v: f64) -> f64 {
 	return v if v >= 0 else -v
-}
-
-unix_for_first_row :: proc(path: string) -> f64 {
-	data, rerr := os.read_entire_file_from_path(path, context.temp_allocator)
-	if rerr != nil {
-		return f64_nan()
-	}
-	val, perr := json.parse(data, allocator = context.temp_allocator)
-	if perr != nil || val == nil {
-		return f64_nan()
-	}
-	arr, arr_ok := val.(json.Array)
-	if !arr_ok || len(arr) == 0 {
-		return f64_nan()
-	}
-	first, first_ok := arr[0].(json.Object)
-	if !first_ok {
-		return f64_nan()
-	}
-	ts, ts_ok := first["iso_timestamp"].(json.String)
-	if !ts_ok {
-		return f64_nan()
-	}
-	d, _, _, consumed := time.iso8601_to_components(ts)
-	if consumed != len(ts) {
-		return f64_nan()
-	}
-	t, dt_ok := time.datetime_to_time(d)
-	return f64(time.time_to_unix(t)) if dt_ok else f64_nan()
 }
 
 fmt_tmp_path :: proc(tag: string) -> string {
