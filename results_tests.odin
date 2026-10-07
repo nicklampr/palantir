@@ -44,6 +44,58 @@ test_default_plot_selection :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_plot_zoom_update :: proc(t: ^testing.T) {
+	state: Plot_Zoom_State
+	x_min, x_max, y_min, y_max := plot_zoom_update(
+		&state,
+		0,
+		10,
+		0,
+		20,
+		0.25,
+		0.75,
+		0,
+		false,
+	)
+	testing.expect(t, x_min == 0 && x_max == 10 && y_min == 0 && y_max == 20, "initial viewport fits all data")
+
+	x_min, x_max, y_min, y_max = plot_zoom_update(
+		&state,
+		0,
+		10,
+		0,
+		20,
+		0.25,
+		0.75,
+		1,
+		false,
+	)
+	testing.expect(t, abs(x_max-x_min-10/1.2) < 1e-9, "wheel zoom changes the horizontal range")
+	testing.expect(t, abs(y_max-y_min-20/1.2) < 1e-9, "wheel zoom changes the vertical range")
+	testing.expect(t, abs(x_min+0.25*(x_max-x_min)-2.5) < 1e-9, "cursor x coordinate stays anchored")
+	testing.expect(t, abs(y_min+0.75*(y_max-y_min)-15) < 1e-9, "cursor y coordinate stays anchored")
+
+	x_min, x_max, y_min, y_max = plot_zoom_update(
+		&state,
+		0,
+		10,
+		0,
+		20,
+		0.5,
+		0.5,
+		0,
+		true,
+	)
+	testing.expect(t, x_min == 0 && x_max == 10 && y_min == 0 && y_max == 20, "reset restores the full data bounds")
+
+	_, _, _, _ = plot_zoom_update(&state, 1, 11, 0, 20, 0.5, 0.5, 0, false)
+	testing.expect(t, state.x_min == 1 && state.x_max == 11, "changed data bounds reset the viewport")
+
+	_, _, _, _ = plot_zoom_update(&state, 0, 10, 0, 20, 0.5, 0.5, 1, false, true)
+	testing.expect(t, abs((state.x_min+state.x_max)*0.5-5) < 1e-9, "centered zoom retains the plot origin")
+}
+
+@(test)
 test_load_csv_generic :: proc(t: ^testing.T) {
 	path := YGG_RESULTS_DIR + "/test_parse_csv_generic.csv"
 	ds, ok := load_csv_dataset(path, "test")

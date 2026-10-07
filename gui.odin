@@ -588,6 +588,119 @@ plot_area_of :: proc(rect: rl.Rectangle, m: Plot_Layout, sc: f32) -> rl.Rectangl
 	}
 }
 
+PLOT_ZOOM_FACTOR :: 1.2
+PLOT_ZOOM_MIN_RATIO :: 0.0001
+PLOT_ZOOM_MAX_RATIO :: 10000.0
+
+plot_zoom_update :: proc(
+	state: ^Plot_Zoom_State,
+	base_x_min, base_x_max, base_y_min, base_y_max: f64,
+	mouse_x, mouse_y, wheel: f64,
+	reset: bool,
+	centered: bool = false,
+) -> (x_min, x_max, y_min, y_max: f64) {
+	if !state.initialized ||
+	   !same_value(state.base_x_min, base_x_min) ||
+	   !same_value(state.base_x_max, base_x_max) ||
+	   !same_value(state.base_y_min, base_y_min) ||
+	   !same_value(state.base_y_max, base_y_max) {
+		state.initialized = true
+		state.base_x_min, state.base_x_max = base_x_min, base_x_max
+		state.base_y_min, state.base_y_max = base_y_min, base_y_max
+		state.x_min, state.x_max = base_x_min, base_x_max
+		state.y_min, state.y_max = base_y_min, base_y_max
+	}
+
+	if reset {
+		state.x_min, state.x_max = base_x_min, base_x_max
+		state.y_min, state.y_max = base_y_min, base_y_max
+	} else if wheel != 0 {
+		factor := math.pow(PLOT_ZOOM_FACTOR, wheel)
+		x_range := (state.x_max - state.x_min) / factor
+		y_range := (state.y_max - state.y_min) / factor
+		x_base_range := base_x_max - base_x_min
+		y_base_range := base_y_max - base_y_min
+		x_range = clamp(
+			x_range,
+			x_base_range * PLOT_ZOOM_MIN_RATIO,
+			x_base_range * PLOT_ZOOM_MAX_RATIO,
+		)
+		y_range = clamp(
+			y_range,
+			y_base_range * PLOT_ZOOM_MIN_RATIO,
+			y_base_range * PLOT_ZOOM_MAX_RATIO,
+		)
+
+		if centered {
+			x_center := (base_x_min + base_x_max) * 0.5
+			y_center := (base_y_min + base_y_max) * 0.5
+			state.x_min, state.x_max = x_center - x_range * 0.5, x_center + x_range * 0.5
+			state.y_min, state.y_max = y_center - y_range * 0.5, y_center + y_range * 0.5
+		} else {
+			fx := clamp(mouse_x, 0, 1)
+			fy := clamp(mouse_y, 0, 1)
+			anchor_x := state.x_min + fx * (state.x_max - state.x_min)
+			anchor_y := state.y_min + fy * (state.y_max - state.y_min)
+			state.x_min = anchor_x - fx * x_range
+			state.x_max = state.x_min + x_range
+			state.y_min = anchor_y - fy * y_range
+			state.y_max = state.y_min + y_range
+		}
+	}
+
+	return state.x_min, state.x_max, state.y_min, state.y_max
+}
+
+plot_zoom_bounds :: proc(
+	app: ^App,
+	plot_id: int,
+	plot_area: rl.Rectangle,
+	base_x_min, base_x_max, base_y_min, base_y_max: f64,
+	centered: bool = false,
+) -> (x_min, x_max, y_min, y_max: f64) {
+	mouse := rl.GetMousePosition()
+	wheel := f64(0)
+	reset := false
+	if !app.exporting &&
+	   !app.palette.open &&
+	   !results_any_dropdown_open(&app.results) &&
+	   rl.CheckCollisionPointRec(mouse, plot_area) {
+		wheel = f64(rl.GetMouseWheelMove())
+		reset = rl.IsMouseButtonPressed(.MIDDLE)
+	}
+
+	if plot_id < 0 || plot_id >= len(app.results.plot_zoom) {
+		return base_x_min, base_x_max, base_y_min, base_y_max
+	}
+	if plot_area.width <= 0 || plot_area.height <= 0 {
+		return base_x_min, base_x_max, base_y_min, base_y_max
+	}
+	fx := f64(mouse.x-plot_area.x) / f64(plot_area.width)
+	fy := 1 - f64(mouse.y-plot_area.y) / f64(plot_area.height)
+	return plot_zoom_update(
+		&app.results.plot_zoom[plot_id],
+		base_x_min,
+		base_x_max,
+		base_y_min,
+		base_y_max,
+		fx,
+		fy,
+		wheel,
+		reset,
+		centered,
+	)
+}
+
+draw_plot_zoom_hint :: proc(rect: rl.Rectangle, theme: Theme, sc: f32) {
+	draw_text(
+		"wheel: zoom  ·  middle-click: reset",
+		i32(rect.x + 8 * sc),
+		i32(rect.y + 16 * sc),
+		i32(8 * sc),
+		theme.muted,
+	)
+}
+
 // Draws the horizontal x-axis label and the rotated y-axis label under/left of
 // the plot area. Shared by every plot widget.
 draw_plot_axis_labels :: proc(
@@ -771,6 +884,9 @@ plot_series :: proc(
 
 	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
 	draw_text(title_cstr, i32(rect.x + 8 * sc), i32(rect.y + 4 * sc), i32(11 * sc), theme.muted)
+	if !app.exporting {
+		draw_plot_zoom_hint(rect, theme, sc)
+	}
 
 	has_hue := false
 	for ps in series {
@@ -829,6 +945,15 @@ plot_series :: proc(
 	if same_value(x_min, x_max) {x_max = x_min + 1}
 	if same_value(y_min, y_max) {y_max = y_min + 1}
 
+	x_min, x_max, y_min, y_max = plot_zoom_bounds(
+		app,
+		app.results.plot.id,
+		plot_area,
+		x_min,
+		x_max,
+		y_min,
+		y_max,
+	)
 	x_range := x_max - x_min
 	y_range := y_max - y_min
 
@@ -876,6 +1001,12 @@ plot_series :: proc(
 	pt_r := (3.5 if scatter else 2.25) * sc
 
 	// Data
+	rl.BeginScissorMode(
+		c.int(plot_area.x),
+		c.int(plot_area.y),
+		c.int(plot_area.width),
+		c.int(plot_area.height),
+	)
 	for s_idx in 0 ..< len(series) {
 		base_color := PLOT_COLORS[s_idx % len(PLOT_COLORS)]
 		pts := series[s_idx].points
@@ -920,6 +1051,7 @@ plot_series :: proc(
 			rl.DrawCircleV(rl.Vector2{sx, sy}, pt_r, col)
 		}
 	}
+	rl.EndScissorMode()
 
 	// Colorbar legend
 	if has_hue && hue_ok {
@@ -943,6 +1075,10 @@ plot_series :: proc(
 					plot_area.y +
 					plot_area.height -
 					f32((p[1] - y_min) / y_range) * plot_area.height
+				if sx < plot_area.x || sx > plot_area.x + plot_area.width ||
+				   sy < plot_area.y || sy > plot_area.y + plot_area.height {
+					continue
+				}
 				dx := f64(mouse.x - sx)
 				dy := f64(mouse.y - sy)
 				dist := math.sqrt(dx * dx + dy * dy)
@@ -1026,6 +1162,9 @@ plot_polar :: proc(
 
 	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
 	draw_text(title_cstr, i32(rect.x + 8 * sc), i32(rect.y + 4 * sc), i32(11 * sc), theme.muted)
+	if !app.exporting {
+		draw_plot_zoom_hint(rect, theme, sc)
+	}
 
 	has_hue := false
 	for ps in series {
@@ -1054,6 +1193,23 @@ plot_polar :: proc(
 	}
 	if !has_data {return}
 	if r_max <= 0 {r_max = 1}
+
+	view_x_min, view_x_max, view_y_min, view_y_max := plot_zoom_bounds(
+		app,
+		PLOT_POLAR,
+		plot_area,
+		-r_max,
+		r_max,
+		-r_max,
+		r_max,
+		true,
+	)
+	r_max = max(
+		math.abs(view_x_min),
+		math.abs(view_x_max),
+		math.abs(view_y_min),
+		math.abs(view_y_max),
+	)
 
 	cx := plot_area.x + plot_area.width * 0.5
 	cy := plot_area.y + plot_area.height * 0.5
@@ -1137,6 +1293,12 @@ plot_polar :: proc(
 		pr := f32(r / r_max) * radius_px
 		return cx + pr * f32(math.cos(theta)), cy - pr * f32(math.sin(theta))
 	}
+	rl.BeginScissorMode(
+		c.int(plot_area.x),
+		c.int(plot_area.y),
+		c.int(plot_area.width),
+		c.int(plot_area.height),
+	)
 	for s_idx in 0 ..< len(series) {
 		base_color := PLOT_COLORS[s_idx % len(PLOT_COLORS)]
 		pts := series[s_idx].points
@@ -1161,6 +1323,7 @@ plot_polar :: proc(
 			rl.DrawCircle(i32(sx), i32(sy), pt_r, col)
 		}
 	}
+	rl.EndScissorMode()
 
 	// Colorbar legend.
 	if has_hue && hue_ok {
@@ -1181,6 +1344,10 @@ plot_polar :: proc(
 			for s_idx in 0 ..< len(series) {
 				for p, k in series[s_idx].points {
 					sx, sy := project(p, cx, cy, radius_px, r_max)
+					if sx < plot_area.x || sx > plot_area.x + plot_area.width ||
+					   sy < plot_area.y || sy > plot_area.y + plot_area.height {
+						continue
+					}
 					dx := f64(mouse.x - sx)
 					dy := f64(mouse.y - sy)
 					dist := math.sqrt(dx * dx + dy * dy)
@@ -1349,6 +1516,9 @@ plot_histogram :: proc(
 
 	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
 	draw_text(title_cstr, i32(rect.x + 8 * sc), i32(rect.y + 4 * sc), i32(11 * sc), theme.muted)
+	if !app.exporting {
+		draw_plot_zoom_hint(rect, theme, sc)
+	}
 
 	n_bins := number_bins
 	if bins_edit != nil {
@@ -1401,12 +1571,24 @@ plot_histogram :: proc(
 	if max_count <= 0 {max_count = 1}
 	top := max_count * 1.1
 
+	view_x_min, view_x_max, view_y_min, view_y_max := plot_zoom_bounds(
+		app,
+		app.results.plot.id,
+		plot_area,
+		f64(min_val),
+		f64(max_val),
+		0,
+		f64(top),
+	)
+	x_view_range := view_x_max - view_x_min
+	y_view_range := view_y_max - view_y_min
+
 	// horizontal grid + y labels
 	lines := 4
 	for i := 0; i <= lines; i += 1 {
 		t := f32(i) / f32(lines)
-		gy := top * t
-		sy := plot_area.y + plot_area.height - t * plot_area.height
+		gy := view_y_min + f64(t) * y_view_range
+		sy := plot_area.y + plot_area.height - f32(t) * plot_area.height
 
 		rl.DrawLine(
 			i32(plot_area.x),
@@ -1425,14 +1607,23 @@ plot_histogram :: proc(
 
 	// bars
 	mouse := rl.GetMousePosition()
-	slot := plot_area.width / f32(n_bars)
-	bar_w := slot
 	hover_idx := -1
+	rl.BeginScissorMode(
+		c.int(plot_area.x),
+		c.int(plot_area.y),
+		c.int(plot_area.width),
+		c.int(plot_area.height),
+	)
 	for i in 0 ..< n_bars {
-		h := (counts[i] / top) * plot_area.height
-		bx := plot_area.x + f32(i) * slot
-		by := plot_area.y + plot_area.height - h
-		bar_rect := rl.Rectangle{bx, by, bar_w, h}
+		bin_min := f64(min_val) + f64(i) * f64(data_range) / f64(n_bars)
+		bin_max := f64(min_val) + f64(i + 1) * f64(data_range) / f64(n_bars)
+		bx_min := plot_area.x + f32((bin_min - view_x_min) / x_view_range) * plot_area.width
+		bx_max := plot_area.x + f32((bin_max - view_x_min) / x_view_range) * plot_area.width
+		base_y := plot_area.y + plot_area.height -
+			f32((0 - view_y_min) / y_view_range) * plot_area.height
+		count_y := plot_area.y + plot_area.height -
+			f32((f64(counts[i]) - view_y_min) / y_view_range) * plot_area.height
+		bar_rect := rl.Rectangle{bx_min, min(base_y, count_y), bx_max - bx_min, abs(base_y - count_y)}
 		rl.DrawRectangleRec(bar_rect, theme.axis_x)
 		rl.DrawRectangleLinesEx(bar_rect, 1, theme.border)
 
@@ -1443,6 +1634,7 @@ plot_histogram :: proc(
 			hover_idx = i
 		}
 	}
+	rl.EndScissorMode()
 
 	// x ticks + labels (thin out labels when there are many bars)
 	axis_y := plot_area.y + plot_area.height
@@ -1451,11 +1643,14 @@ plot_histogram :: proc(
 		tick_step = (n_bars + 7) / 8
 	}
 	for i in 0 ..< n_bars {
-		cx := plot_area.x + f32(i) * slot + slot * 0.5
+		mid := f64(min_val) + (f64(i) + 0.5) * f64(data_range) / f64(n_bars)
+		cx := plot_area.x + f32((mid - view_x_min) / x_view_range) * plot_area.width
+		if cx < plot_area.x || cx > plot_area.x + plot_area.width {
+			continue
+		}
 		rl.DrawLine(i32(cx), i32(axis_y), i32(cx), i32(axis_y + 5 * sc), theme.text)
 		if i % tick_step == 0 {
 			// label the bin's midpoint value
-			mid := min_val + (f32(i) + 0.5) * data_range / f32(n_bars)
 			label_text := fmt.tprintf("%.0f", mid)
 			if data_range / f32(n_bars) < 1 {
 				label_text = fmt.tprintf("%.1f", mid)
@@ -1508,6 +1703,9 @@ plot_histogram_2d :: proc(
 
 	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
 	draw_text(title_cstr, i32(rect.x + 8 * sc), i32(rect.y + 4 * sc), i32(11 * sc), theme.muted)
+	if !app.exporting {
+		draw_plot_zoom_hint(rect, theme, sc)
+	}
 
 	plot_area := plot_area_of(rect, histogram2d_margins, sc)
 
@@ -1540,58 +1738,83 @@ plot_histogram_2d :: proc(
 	}
 	if max_x == min_x {max_x = min_x + 1}
 	if max_y == min_y {max_y = min_y + 1}
-	x_range := max_x - min_x
-	y_range := max_y - min_y
+	data_x_range := max_x - min_x
+	data_y_range := max_y - min_y
 
 	counts := make([]i32, n_bx * n_by, context.temp_allocator)
 	for p in points {
-		ix := int((p[0] - min_x) / x_range * f64(n_bx))
-		iy := int((p[1] - min_y) / y_range * f64(n_by))
+		ix := int((p[0] - min_x) / data_x_range * f64(n_bx))
+		iy := int((p[1] - min_y) / data_y_range * f64(n_by))
 		ix = clamp(ix, 0, n_bx - 1)
 		iy = clamp(iy, 0, n_by - 1)
 		counts[iy * n_bx + ix] += 1
 	}
 
+	view_x_min, view_x_max, view_y_min, view_y_max := plot_zoom_bounds(
+		app,
+		app.results.plot.id,
+		plot_area,
+		min_x,
+		max_x,
+		min_y,
+		max_y,
+	)
+	x_view_range := view_x_max - view_x_min
+	y_view_range := view_y_max - view_y_min
+
 	max_count := i32(0)
 	for c in counts {max_count = max(max_count, c)}
 	if max_count <= 0 {max_count = 1}
-
-	cell_w := plot_area.width / f32(n_bx)
-	cell_h := plot_area.height / f32(n_by)
 
 	// heatmap cells (blue -> red with count), empty cells keep the background
 	mouse := rl.GetMousePosition()
 	hover_ix := -1
 	hover_iy := 0
 	hover_count := 0
+	rl.BeginScissorMode(
+		c.int(plot_area.x),
+		c.int(plot_area.y),
+		c.int(plot_area.width),
+		c.int(plot_area.height),
+	)
 	for iy in 0 ..< n_by {
 		for ix in 0 ..< n_bx {
 			c := counts[iy * n_bx + ix]
 			if c == 0 {continue}
+			cell_x_min := min_x + f64(ix) * data_x_range / f64(n_bx)
+			cell_x_max := min_x + f64(ix + 1) * data_x_range / f64(n_bx)
+			cell_y_min := min_y + f64(iy) * data_y_range / f64(n_by)
+			cell_y_max := min_y + f64(iy + 1) * data_y_range / f64(n_by)
+			if cell_x_max < view_x_min || cell_x_min > view_x_max ||
+			   cell_y_max < view_y_min || cell_y_min > view_y_max {
+				continue
+			}
+			x0 := plot_area.x + f32((cell_x_min - view_x_min) / x_view_range) * plot_area.width
+			x1 := plot_area.x + f32((cell_x_max - view_x_min) / x_view_range) * plot_area.width
+			y0 := plot_area.y + plot_area.height -
+				f32((cell_y_max - view_y_min) / y_view_range) * plot_area.height
+			y1 := plot_area.y + plot_area.height -
+				f32((cell_y_min - view_y_min) / y_view_range) * plot_area.height
 			cell := rl.Rectangle {
-				plot_area.x + f32(ix) * cell_w,
-				plot_area.y + plot_area.height - f32(iy + 1) * cell_h,
-				cell_w,
-				cell_h,
+				x0,
+				y0,
+				x1 - x0,
+				y1 - y0,
 			}
 			t := f32(c) / f32(max_count)
 			col := color_lerp(theme.axis_x, theme.axis_z, t)
 			rl.DrawRectangleRec(cell, col)
-
-			if mouse.x >= cell.x &&
-			   mouse.x <= cell.x + cell.width &&
-			   mouse.y >= cell.y &&
-			   mouse.y <= cell.y + cell.height {
-				hover_ix = ix
-				hover_iy = iy
-				hover_count = int(c)
-			}
 		}
 	}
+	rl.EndScissorMode()
 
-	// grid lines
-	for ix := 0; ix <= n_bx; ix += 1 {
-		gx := plot_area.x + f32(ix) * cell_w
+	// Grid lines and tick labels follow the visible data window.
+	for i := 0; i <= 4; i += 1 {
+		fx := f64(i) / 4
+		gx := plot_area.x + f32(fx) * plot_area.width
+		gy := plot_area.y + plot_area.height - f32(fx) * plot_area.height
+		x_value := view_x_min + fx * x_view_range
+		y_value := view_y_min + fx * y_view_range
 		rl.DrawLine(
 			i32(gx),
 			i32(plot_area.y),
@@ -1599,9 +1822,6 @@ plot_histogram_2d :: proc(
 			i32(plot_area.y + plot_area.height),
 			theme.grid,
 		)
-	}
-	for iy := 0; iy <= n_by; iy += 1 {
-		gy := plot_area.y + plot_area.height - f32(iy) * cell_h
 		rl.DrawLine(
 			i32(plot_area.x),
 			i32(gy),
@@ -1609,40 +1829,34 @@ plot_histogram_2d :: proc(
 			i32(gy),
 			theme.grid,
 		)
+
+		x_lbl := strings.clone_to_cstring(fmt.tprintf("%.2f", x_value), context.temp_allocator)
+		y_lbl := strings.clone_to_cstring(fmt.tprintf("%.2f", y_value), context.temp_allocator)
+		x_tw := f32(measure_text(x_lbl, font_size - 2))
+		draw_text(
+			x_lbl,
+			i32(gx - x_tw * 0.5),
+			i32(plot_area.y + plot_area.height + 6 * sc),
+			font_size - 2,
+			theme.text,
+		)
+		draw_text(
+			y_lbl,
+			i32(plot_area.x - f32(measure_text(y_lbl, font_size - 2)) - 4 * sc),
+			i32(gy - f32(font_size - 2) * 0.5),
+			font_size - 2,
+			theme.text,
+		)
 	}
 
-	// x ticks + labels (thin out labels when there are many bins)
-	axis_y := plot_area.y + plot_area.height
-	tick_step_x := 1
-	if n_bx > 8 {tick_step_x = (n_bx + 7) / 8}
-	for ix in 0 ..< n_bx {
-		cx := plot_area.x + f32(ix) * cell_w + cell_w * 0.5
-		rl.DrawLine(i32(cx), i32(axis_y), i32(cx), i32(axis_y + 5 * sc), theme.text)
-		if ix % tick_step_x == 0 {
-			v := min_x + f64(ix) * x_range / f64(n_bx)
-			lbl := strings.clone_to_cstring(fmt.tprintf("%.1f", v), context.temp_allocator)
-			tw := f32(measure_text(lbl, font_size - 2))
-			draw_text(lbl, i32(cx - tw * 0.5), i32(axis_y + 6 * sc), font_size - 2, theme.text)
-		}
-	}
-	// y ticks + labels
-	axis_x := plot_area.x
-	tick_step_y := 1
-	if n_by > 8 {tick_step_y = (n_by + 7) / 8}
-	for iy in 0 ..< n_by {
-		cy := plot_area.y + plot_area.height - (f32(iy) + 0.5) * cell_h
-		rl.DrawLine(i32(axis_x), i32(cy), i32(axis_x - 5 * sc), i32(cy), theme.text)
-		if iy % tick_step_y == 0 {
-			v := min_y + f64(iy) * y_range / f64(n_by)
-			lbl := strings.clone_to_cstring(fmt.tprintf("%.1f", v), context.temp_allocator)
-			tw := f32(measure_text(lbl, font_size - 2))
-			draw_text(
-				lbl,
-				i32(axis_x - tw - 2 * sc),
-				i32(cy - f32(font_size - 2) * 0.5),
-				font_size - 2,
-				theme.text,
-			)
+	if rl.CheckCollisionPointRec(mouse, plot_area) {
+		x_value := view_x_min + f64(mouse.x-plot_area.x) / f64(plot_area.width) * x_view_range
+		y_value := view_y_min +
+			f64(plot_area.y+plot_area.height-mouse.y) / f64(plot_area.height) * y_view_range
+		if x_value >= min_x && x_value <= max_x && y_value >= min_y && y_value <= max_y {
+			hover_ix = clamp(int((x_value-min_x)/data_x_range*f64(n_bx)), 0, n_bx-1)
+			hover_iy = clamp(int((y_value-min_y)/data_y_range*f64(n_by)), 0, n_by-1)
+			hover_count = int(counts[hover_iy*n_bx+hover_ix])
 		}
 	}
 
@@ -1685,10 +1899,10 @@ plot_histogram_2d :: proc(
 
 	// hover tooltip
 	if !app.exporting && hover_ix >= 0 {
-		xlo := min_x + f64(hover_ix) * x_range / f64(n_bx)
-		xhi := min_x + f64(hover_ix + 1) * x_range / f64(n_bx)
-		ylo := min_y + f64(hover_iy) * y_range / f64(n_by)
-		yhi := min_y + f64(hover_iy + 1) * y_range / f64(n_by)
+		xlo := min_x + f64(hover_ix) * data_x_range / f64(n_bx)
+		xhi := min_x + f64(hover_ix + 1) * data_x_range / f64(n_bx)
+		ylo := min_y + f64(hover_iy) * data_y_range / f64(n_by)
+		yhi := min_y + f64(hover_iy + 1) * data_y_range / f64(n_by)
 
 		lines := []string {
 			fmt.tprintf("x: [%.2f, %.2f)", xlo, xhi),

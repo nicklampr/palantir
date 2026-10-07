@@ -32,6 +32,18 @@ PLOT_QUIVER :: 6
 PLOT_QUIVER3D :: 7
 PLOT_POLAR :: 8
 
+Plot_Zoom_State :: struct {
+	initialized: bool,
+	base_x_min,
+	base_x_max,
+	base_y_min,
+	base_y_max: f64,
+	x_min,
+	x_max,
+	y_min,
+	y_max: f64,
+}
+
 File_Entry :: struct {
 	name:   string,
 	path:   string,
@@ -122,6 +134,7 @@ Results_State :: struct {
 	// keyboard navigation can't also act on that same keypress.
 	text_enter:        bool,
 	plot:              Results_Plot,
+	plot_zoom:         [PLOT_POLAR + 1]Plot_Zoom_State,
 	map_view:          Map_View,
 	map_bg:            Map_Background,
 	map_bg_init:       bool,

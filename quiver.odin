@@ -17,6 +17,7 @@ package palantir
 // so the longest one maps to a readable fraction of the plot area
 // (matplotlib's default behavior), then the user multiplier is applied.
 
+import "core:c"
 import "core:fmt"
 import "core:math"
 import "core:strings"
@@ -201,6 +202,9 @@ plot_quiver :: proc(
 
 	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
 	draw_text(title_cstr, i32(rect.x + 8 * sc), i32(rect.y + 4 * sc), i32(11 * sc), theme.muted)
+	if !app.exporting {
+		draw_plot_zoom_hint(rect, theme, sc)
+	}
 
 	plot_area := plot_area_of(rect, Plot_Layout{70, 26, 40, 22}, sc)
 
@@ -219,6 +223,17 @@ plot_quiver :: proc(
 	y_max := maxp[1] + y_pad
 	if same_value(x_min, x_max) {x_max = x_min + 1}
 	if same_value(y_min, y_max) {y_max = y_min + 1}
+	base_x_range := x_max - x_min
+	base_y_range := y_max - y_min
+	x_min, x_max, y_min, y_max = plot_zoom_bounds(
+		app,
+		PLOT_QUIVER,
+		plot_area,
+		x_min,
+		x_max,
+		y_min,
+		y_max,
+	)
 	x_range := x_max - x_min
 	y_range := y_max - y_min
 
@@ -276,8 +291,8 @@ plot_quiver :: proc(
 			screen_len[i] = 0
 			continue
 		}
-		dx := (a.u / x_range) * f64(plot_area.width)
-		dy := (a.v / y_range) * f64(plot_area.height)
+		dx := (a.u / base_x_range) * f64(plot_area.width)
+		dy := (a.v / base_y_range) * f64(plot_area.height)
 		screen_len[i] = math.sqrt(dx * dx + dy * dy)
 	}
 	// Longest arrow maps to ~30% of the plot's smaller side, so dense fields
@@ -295,6 +310,12 @@ plot_quiver :: proc(
 	}
 
 	// Arrows.
+	rl.BeginScissorMode(
+		c.int(plot_area.x),
+		c.int(plot_area.y),
+		c.int(plot_area.width),
+		c.int(plot_area.height),
+	)
 	for a, i in arrows {
 		if math.is_nan(a.x) || math.is_nan(a.y) || math.is_nan(a.u) || math.is_nan(a.v) {
 			continue
@@ -304,11 +325,12 @@ plot_quiver :: proc(
 
 		dx := f64(head.x - tail.x)
 		dy := f64(head.y - tail.y)
-		len_px := screen_len[i] * factor
+		natural_len_px := math.sqrt(dx * dx + dy * dy)
+		len_px := natural_len_px * factor
 		if len_px < 1 {
 			continue
 		}
-		ux, uy := dx / math.sqrt(dx * dx + dy * dy), dy / math.sqrt(dx * dx + dy * dy)
+		ux, uy := dx / natural_len_px, dy / natural_len_px
 		// Scale the natural direction so the arrow is `len_px` long on screen.
 		head = rl.Vector2{tail.x + f32(ux * len_px), tail.y + f32(uy * len_px)}
 
@@ -332,6 +354,7 @@ plot_quiver :: proc(
 		rl.DrawLineEx(head, rl.Vector2{f32(b1.x), f32(b1.y)}, line_w, col)
 		rl.DrawLineEx(head, rl.Vector2{f32(b2.x), f32(b2.y)}, line_w, col)
 	}
+	rl.EndScissorMode()
 
 	if color_ok {
 		draw_plot_colorbar(
@@ -359,6 +382,10 @@ plot_quiver :: proc(
 				continue
 			}
 			pt := to_screen(plot_area, x_min, y_min, x_range, y_range, a.x, a.y)
+			if pt.x < plot_area.x || pt.x > plot_area.x + plot_area.width ||
+			   pt.y < plot_area.y || pt.y > plot_area.y + plot_area.height {
+				continue
+			}
 			dx := f64(mouse.x - pt.x)
 			dy := f64(mouse.y - pt.y)
 			if d := math.sqrt(dx * dx + dy * dy); d < best_dist {
