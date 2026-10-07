@@ -33,6 +33,7 @@ EARTH_BG_PNG := #load("ne_earth_bg.png")
 
 // Square Web-Mercator background texture size (covers lat ±85.05).
 MAP_BG_SIZE :: 8192
+// MAP_BG_SIZE :: 4096
 
 // Rows of the master reprojection are filled by this many worker threads.
 BG_REPRO_THREADS :: 4
@@ -502,19 +503,15 @@ draw_legend :: proc(
 		y := by + pad + f32(i) * row_h
 		swatch := rl.Rectangle{bx + pad, y, 12 * sc, 12 * sc}
 		draw_fill_rounded(swatch, routes[i].color, 3)
-		rl.DrawTextEx(
-			app_font,
-			names[i],
-			rl.Vector2{bx + pad + 18 * sc, y},
-			fs,
-			1,
-			theme.text,
-		)
+		rl.DrawTextEx(app_font, names[i], rl.Vector2{bx + pad + 18 * sc, y}, fs, 1, theme.text)
 	}
 }
 
 draw_map_hint :: proc(plot: rl.Rectangle, theme: Theme, font_size: i32, sc: f32) {
-	hint_cstr := strings.clone_to_cstring("drag or middle-drag: pan · ctrl+wheel: zoom", context.temp_allocator)
+	hint_cstr := strings.clone_to_cstring(
+		"drag or middle-drag: pan · ctrl+wheel: zoom",
+		context.temp_allocator,
+	)
 	draw_text(
 		hint_cstr,
 		i32(plot.x + 8 * sc),
@@ -636,14 +633,10 @@ draw_map_hover_tooltip :: proc(
 
 	if t := cache.time[best_pt]; !math.is_nan(t) {
 		dt, _ := time.time_to_datetime(time.unix(i64(t), 0))
-		append(&lines, fmt.tprintf(
-			"%04d-%02d-%02d %02d:%02d",
-			dt.year,
-			dt.month,
-			dt.day,
-			dt.hour,
-			dt.minute,
-		))
+		append(
+			&lines,
+			fmt.tprintf("%04d-%02d-%02d %02d:%02d", dt.year, dt.month, dt.day, dt.hour, dt.minute),
+		)
 	}
 
 	for ci, i in cache.cols {
@@ -703,3 +696,4 @@ test_map_projection_roundtrip :: proc(t: ^testing.T) {
 		)
 	}
 }
+
