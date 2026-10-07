@@ -222,6 +222,7 @@ GuiCommand :: enum {
 	open_recents,
 	find_files,
 	refresh_plots,
+	toggle_font,
 	toggle_left_panel,
 	toggle_bottom_panel,
 	quit,
@@ -253,6 +254,11 @@ gui_commands := [?]Palette_Command {
 				user_data = rawptr(uintptr(GuiCommand.theme_vesper)),
 			},
 		},
+	},
+	{
+		name = "Toggle UI font",
+		description = "switch between bundled Inter and raylib's default font",
+		user_data = rawptr(uintptr(GuiCommand.toggle_font)),
 	},
 	{
 		name = "Open results folder",
@@ -537,6 +543,8 @@ on_palette_select :: proc(cmd: Palette_Command) {
 		results_focus_search(&default_app)
 	case .refresh_plots:
 		results_refresh(&default_app)
+	case .toggle_font:
+		_ = toggle_app_font()
 	case .toggle_left_panel:
 		results_toggle_left_panel(&default_app)
 	case .toggle_bottom_panel:

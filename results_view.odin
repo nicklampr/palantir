@@ -1600,67 +1600,113 @@ draw_plot_selector :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32)
 		rs.plot.plot_open = false
 	}
 
-	options := make([dynamic]u8, 0, 128, context.temp_allocator)
-	for name, i in PLOT_NAMES {
-		if i > 0 {append(&options, ';')}
-		append(&options, name)
-	}
-	options_c := strings.clone_to_cstring(string(options[:]), context.temp_allocator)
-	active := c.int(clamp(rs.plot.id, 0, len(PLOT_NAMES) - 1))
+	mouse := rl.GetMousePosition()
+	header_hover := rl.CheckCollisionPointRec(mouse, rect)
+	radius := UI_RADIUS_SM * sc
+	control_bg := color_lerp(theme.window_bg, theme.border, 0.7)
+	button_bg := theme.hover if header_hover else control_bg
+	draw_fill_rounded(rect, button_bg, radius)
+	draw_stroke_rounded(rect, theme.accent if header_hover else theme.border, radius, 1)
 
-	// raygui keeps a process-global style. Save and restore the dropdown colors
-	// so this control follows the selected Palantir theme without changing
-	// unrelated raygui widgets.
-	props := [?]c.int {
-		c.int(rl.GuiControlProperty.BORDER_COLOR_NORMAL),
-		c.int(rl.GuiControlProperty.BASE_COLOR_NORMAL),
-		c.int(rl.GuiControlProperty.TEXT_COLOR_NORMAL),
-		c.int(rl.GuiControlProperty.BORDER_COLOR_FOCUSED),
-		c.int(rl.GuiControlProperty.BASE_COLOR_FOCUSED),
-		c.int(rl.GuiControlProperty.TEXT_COLOR_FOCUSED),
-		c.int(rl.GuiControlProperty.BORDER_COLOR_PRESSED),
-		c.int(rl.GuiControlProperty.BASE_COLOR_PRESSED),
-		c.int(rl.GuiControlProperty.TEXT_COLOR_PRESSED),
-	}
-	colors := [?]c.uint {
-		rl.ColorToInt(theme.border),
-		rl.ColorToInt(theme.window_bg),
-		rl.ColorToInt(theme.text),
-		rl.ColorToInt(theme.accent),
-		rl.ColorToInt(theme.hover),
-		rl.ColorToInt(theme.text),
-		rl.ColorToInt(theme.accent),
-		rl.ColorToInt(theme.accent),
-		rl.ColorToInt(theme.accent_text),
-	}
-	old := [len(props)]c.int{}
-	for i in 0 ..< len(props) {
-		old[i] = rl.GuiGetStyle(.DROPDOWNBOX, props[i])
-		rl.GuiSetStyle(.DROPDOWNBOX, props[i], c.int(colors[i]))
-	}
-	text_size_prop := c.int(rl.GuiDefaultProperty.TEXT_SIZE)
-	old_text_size := rl.GuiGetStyle(.DEFAULT, text_size_prop)
-	rl.GuiSetStyle(.DEFAULT, text_size_prop, c.int(max(10, i32(12 * sc))))
+	active_name := PLOT_NAMES[clamp(rs.plot.id, 0, len(PLOT_NAMES) - 1)]
+	active_c := strings.clone_to_cstring(active_name, context.temp_allocator)
+	font_size := i32(max(12, 14 * sc))
+	active_w := f32(measure_text(active_c, font_size))
+	arrow_pad := 22 * sc
+	draw_text(
+		active_c,
+		c.int(rect.x + max((rect.width - arrow_pad - active_w) * 0.5, 10 * sc)),
+		c.int(rect.y + (rect.height - f32(font_size)) * 0.5),
+		font_size,
+		theme.text,
+	)
+	arrow_x := rect.x + rect.width - 16 * sc
+	arrow_y := rect.y + rect.height * 0.5
+	rl.DrawLineEx(
+		{arrow_x - 4 * sc, arrow_y - 2 * sc},
+		{arrow_x, arrow_y + 2 * sc},
+		max(sc, 1),
+		theme.text,
+	)
+	rl.DrawLineEx(
+		{arrow_x, arrow_y + 2 * sc},
+		{arrow_x + 4 * sc, arrow_y - 2 * sc},
+		max(sc, 1),
+		theme.text,
+	)
 
-	if app.palette.open {
-		rl.GuiLock()
-	}
-	changed := rl.GuiDropdownBox(rect, options_c, &active, rs.plot.plot_open)
-	if app.palette.open {
-		rl.GuiUnlock()
-	}
-	rl.GuiSetStyle(.DEFAULT, text_size_prop, old_text_size)
-	for i in 0 ..< len(props) {
-		rl.GuiSetStyle(.DROPDOWNBOX, props[i], old[i])
-	}
-
-	rs.plot.id = int(active)
-	if changed {
-		rs.plot.plot_open = !rs.plot.plot_open
-		if rs.plot.id != PLOT_CONTOUR {
-			rs.plot.contour_levels_edit = false
+	popup := rl.Rectangle{}
+	row_h := 30 * sc
+	if rs.plot.plot_open {
+		// This explicit themed popup avoids raygui's global/default list styles,
+		// which can leave option text and backgrounds with poor contrast.
+		popup_bg := control_bg
+		popup.height = row_h * f32(len(PLOT_NAMES))
+		popup.width = rect.width
+		popup.x = rect.x
+		popup.y = rect.y + rect.height
+		margin := 6 * sc
+		if popup.y + popup.height > f32(rl.GetScreenHeight()) - margin {
+			popup.y = rect.y - popup.height
 		}
+		popup.y = clamp(popup.y, margin, max(margin, f32(rl.GetScreenHeight()) - popup.height - margin))
+		draw_fill_rounded(popup, popup_bg, radius)
+		draw_stroke_rounded(popup, theme.border, radius, 1)
+
+		for name, i in PLOT_NAMES {
+			row := rl.Rectangle {
+				popup.x + 2 * sc,
+				popup.y + f32(i) * row_h + 1 * sc,
+				popup.width - 4 * sc,
+				row_h - 2 * sc,
+			}
+			hover := rl.CheckCollisionPointRec(mouse, row)
+			if i == rs.plot.id {
+				rl.DrawRectangleRec(row, theme.accent)
+			} else if hover {
+				rl.DrawRectangleRec(row, theme.hover)
+			}
+			name_c := strings.clone_to_cstring(name, context.temp_allocator)
+			text_color := theme.accent_text if i == rs.plot.id else theme.text
+			draw_text(
+				name_c,
+				c.int(row.x + 10 * sc),
+				c.int(row.y + (row.height - f32(font_size)) * 0.5),
+				font_size,
+				text_color,
+			)
+		}
+
+		if rl.IsKeyPressed(.ESCAPE) && !app.palette.open {
+			rs.plot.plot_open = false
+		} else if rl.IsMouseButtonReleased(.LEFT) {
+			if header_hover {
+				rs.plot.plot_open = false
+			} else if rl.CheckCollisionPointRec(mouse, popup) {
+				for name, i in PLOT_NAMES {
+					row := rl.Rectangle {
+						popup.x + 2 * sc,
+						popup.y + f32(i) * row_h + 1 * sc,
+						popup.width - 4 * sc,
+						row_h - 2 * sc,
+					}
+					if rl.CheckCollisionPointRec(mouse, row) {
+						rs.plot.id = i
+						rs.plot.plot_open = false
+						if i != PLOT_CONTOUR {
+							rs.plot.contour_levels_edit = false
+						}
+						results_close_column_popups(rs)
+						break
+					}
+				}
+			} else {
+				rs.plot.plot_open = false
+			}
+		}
+	} else if header_hover && rl.IsMouseButtonReleased(.LEFT) && !app.palette.open {
 		results_close_column_popups(rs)
+		rs.plot.plot_open = true
 	}
 }
 

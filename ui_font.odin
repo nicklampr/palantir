@@ -1,12 +1,9 @@
 package palantir
 
 // Bundled app font (see fonts/Inter-Regular.ttf), embedded into the binary at
-// compile time so the app renders text from any working directory (no runtime
-// dependency on a fonts/ folder next to the executable). Used for every piece
-// of text in the app — including raygui controls via `rl.GuiSetFont` and the
-// offscreen PNG plot exports. raylib's `DrawText` and `MeasureText` always
-// render with the built-in default font, so the app routes all text through
-// the `draw_text`/`measure_text` wrappers below.
+// compile time so it is available from any working directory. The active font
+// can be switched between this font and raylib's built-in default via the
+// command palette. Every UI and plot-export text path uses the active font.
 
 import "core:c"
 import rl "vendor:raylib"
@@ -17,14 +14,21 @@ APP_FONT_DATA :: #load("fonts/Inter-Regular.ttf", []u8)
 // 200% UI zoom on a 4K display), so a generous base size keeps glyphs crisp.
 APP_FONT_BASE_SIZE :: 96
 
-app_font: rl.Font
-app_font_loaded: bool
+app_font: rl.Font // active font used by all drawing and measuring wrappers
+app_custom_font: rl.Font
+app_font_loaded: bool // custom font atlas was loaded successfully
+app_font_is_default: bool
 
 // Loads the embedded font. On failure (web build) the app falls back to
 // raylib's built-in default font.
 load_app_font :: proc() {
 	app_font = rl.GetFontDefault()
+	// The built-in font is a low-resolution bitmap atlas. Keep it on nearest-
+	// neighbor sampling even when the custom font is the currently active one.
+	rl.SetTextureFilter(app_font.texture, .POINT)
+	app_custom_font = rl.GetFontDefault()
 	app_font_loaded = false
+	app_font_is_default = true
 	when ODIN_OS != .JS {
 		// LoadFontEx() auto-generates the atlas with a naive row packer whose
 		// area estimate is too small for Inter at 96px: the atlas comes out
@@ -75,8 +79,10 @@ load_app_font :: proc() {
 				}
 				rl.UnloadImage(atlas)
 				if font.texture.id != 0 {
+					app_custom_font = font
 					app_font = font
 					app_font_loaded = true
+					app_font_is_default = false
 				} else {
 					rl.UnloadFont(font)
 				}
@@ -87,14 +93,38 @@ load_app_font :: proc() {
 	}
 	// Text glyphs are crisp at 1:1; bilinear needs no mipmaps (TRILINEAR would
 	// warn that the atlas has none).
-	rl.SetTextureFilter(app_font.texture, .BILINEAR)
+	if app_font_loaded {
+		rl.SetTextureFilter(app_custom_font.texture, .BILINEAR)
+	}
+}
+
+// Toggles between the custom bundled font and raylib's built-in default.
+// Returns false when the custom font could not be loaded (e.g. on web).
+toggle_app_font :: proc() -> bool {
+	if !app_font_loaded {
+		return false
+	}
+	app_font_is_default = !app_font_is_default
+	if app_font_is_default {
+		app_font = rl.GetFontDefault()
+		// The built-in atlas is low-resolution bitmap art; linear filtering
+		// smears its glyphs when the UI scales it above the native size.
+		rl.SetTextureFilter(app_font.texture, .POINT)
+	} else {
+		app_font = app_custom_font
+	}
+	rl.GuiSetFont(app_font)
+	return true
 }
 
 unload_app_font :: proc() {
 	if app_font_loaded {
-		rl.UnloadFont(app_font)
+		rl.UnloadFont(app_custom_font)
+		app_custom_font = {}
 		app_font_loaded = false
 	}
+	app_font = rl.GetFontDefault()
+	app_font_is_default = true
 }
 
 // Equivalent of `rl.DrawText` but rendered with the app font.
