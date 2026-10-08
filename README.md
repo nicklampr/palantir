@@ -26,6 +26,9 @@ Contour levels are set with `--levels N` (1–32); `--frames N` closes after N
 GUI frames. For resource-release smoke tests, use `--switch-after N --then PLOT`
 to switch plots automatically. Run `palantir --help` for the full option list.
 
+For an in-app guide to controls and shortcuts, press `Ctrl+Shift+P` and select
+**App walkthrough** from the command palette.
+
 The compressed Natural Earth map background is embedded in the executable.
 It is decoded and uploaded only when the Map plot is opened; no external image
 file is needed at runtime.

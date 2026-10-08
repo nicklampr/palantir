@@ -16,6 +16,32 @@ import rl "vendor:raylib"
 global_app_test_mutex: sync.Mutex
 
 @(test)
+test_walkthrough_palette_command :: proc(t: ^testing.T) {
+	sync.mutex_lock(&global_app_test_mutex)
+	defer sync.mutex_unlock(&global_app_test_mutex)
+	default_app = {}
+	defer default_app = {}
+	app := &default_app
+	palette_init(&app.palette, gui_commands[:], on_palette_select)
+	defer palette_destroy(&app.palette)
+	palette_open_it(&app.palette)
+	app.walkthrough_scroll = 100
+
+	found := false
+	for cmd, i in gui_commands {
+		if GuiCommand(uintptr(cmd.user_data)) == .show_walkthrough {
+			palette_activate(&app.palette, i)
+			found = true
+			break
+		}
+	}
+	testing.expect(t, found, "walkthrough is in the command palette")
+	testing.expect(t, app.walkthrough_open, "selecting walkthrough opens the dialog")
+	testing.expect(t, app.walkthrough_scroll == 0, "opening walkthrough resets its scroll position")
+	testing.expect(t, !app.palette.open, "palette closes when walkthrough opens")
+}
+
+@(test)
 test_default_plot_selection :: proc(t: ^testing.T) {
 	settings := default_settings()
 	testing.expect(t, settings.plot_id == PLOT_SCATTER, "new settings should default to a 2D scatter plot")

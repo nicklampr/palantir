@@ -31,6 +31,8 @@ App :: struct {
 	ui_scale_zoom:           f32, // user-adjustable multiplier on the detected UI scale
 	ui_scale:                f32, // clamped base scale * zoom, used for all UI metrics
 	palette:                 Command_Palette,
+	walkthrough_open:        bool,
+	walkthrough_scroll:      f32,
 	// True for one frame after the palette consumes input and closes, so the
 	// file browser cannot also react to the same keypress (e.g. the Enter that
 	// navigated a Ctrl+G folder selection would otherwise re-fire on the fresh
@@ -222,6 +224,7 @@ GuiCommand :: enum {
 	open_recents,
 	find_files,
 	refresh_plots,
+	show_walkthrough,
 	toggle_font,
 	toggle_left_panel,
 	toggle_bottom_panel,
@@ -254,6 +257,11 @@ gui_commands := [?]Palette_Command {
 				user_data = rawptr(uintptr(GuiCommand.theme_vesper)),
 			},
 		},
+	},
+	{
+		name = "App walkthrough",
+		description = "show controls, shortcuts, and how to use plots",
+		user_data = rawptr(uintptr(GuiCommand.show_walkthrough)),
 	},
 	{
 		name = "Toggle UI font",
@@ -353,6 +361,8 @@ app_init :: proc(app: ^App, config := App_Config{}) {
 		cfg.height = settings.window_height
 	}
 	app.running = true
+	app.walkthrough_open = false
+	app.walkthrough_scroll = 0
 	app.themes = BASE_THEMES
 	app.theme_index =
 		settings.theme_index if settings.theme_index >= 0 && settings.theme_index < len(app.themes) else 0
@@ -442,21 +452,29 @@ app_update :: proc(app: ^App) {
 		refresh_palette_recents(app)
 		app.recents_dirty = false
 	}
-	palette_toggle_on_shortcut(&app.palette)
-	// Capture whether the palette owned this frame's input before it runs; if it
-	// closes here, the rest of the frame must not act on the same keypresses.
-	palette_was_open := app.palette.open
-	palette_update(&app.palette)
-	app.palette_just_closed = palette_was_open && !app.palette.open
-	handle_ui_zoom(app)
+	app.palette_just_closed = false
+	if !app.walkthrough_open {
+		palette_toggle_on_shortcut(&app.palette)
+		// Capture whether the palette owned this frame's input before it runs; if it
+		// closes here, the rest of the frame must not act on the same keypresses.
+		palette_was_open := app.palette.open
+		palette_update(&app.palette)
+		app.palette_just_closed = palette_was_open && !app.palette.open
+		handle_ui_zoom(app)
+	}
 
 	rl.BeginDrawing()
 	t := app.themes[app.theme_index]
 	app.palette.style = palette_style_for_theme(t, app.ui_scale)
 	rl.ClearBackground(t.window_bg)
-	draw_results_view(app)
-
-	palette_draw(&app.palette, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()))
+	if app.walkthrough_open {
+		// Skip the live explorer while the walkthrough owns input. The palette's
+		// Enter key must not close the newly opened dialog on the same frame.
+		draw_walkthrough(app, t, !app.palette_just_closed)
+	} else {
+		draw_results_view(app)
+		palette_draw(&app.palette, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()))
+	}
 	rl.EndDrawing()
 
 	free_all(context.temp_allocator)
@@ -546,6 +564,9 @@ on_palette_select :: proc(cmd: Palette_Command) {
 		results_focus_search(&default_app)
 	case .refresh_plots:
 		results_refresh(&default_app)
+	case .show_walkthrough:
+		default_app.walkthrough_open = true
+		default_app.walkthrough_scroll = 0
 	case .toggle_font:
 		_ = toggle_app_font()
 	case .toggle_left_panel:
