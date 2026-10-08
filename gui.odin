@@ -65,7 +65,8 @@ App_Config :: struct {
 }
 
 default_config :: proc() -> App_Config {
-	return App_Config{width = 1280, height = 720, title = "Palantir", target_fps = 60}
+	// return App_Config{width = 1280, height = 720, title = "Palantir", target_fps = 60}
+	return App_Config{width = 1920, height = 1080, title = "Palantir", target_fps = 60}
 }
 
 // Persisted between runs in the platform config directory (native builds only);
@@ -155,8 +156,7 @@ load_settings :: proc() -> App_Settings {
 	when ODIN_OS != .JS {
 		if path := settings_path(); path != "" {
 			defer delete(path)
-			if data, err := os.read_entire_file_from_path(path, context.allocator);
-			   err == nil {
+			if data, err := os.read_entire_file_from_path(path, context.allocator); err == nil {
 				defer delete(data)
 				_ = json.unmarshal(data, &s)
 			}
@@ -369,6 +369,9 @@ app_init :: proc(app: ^App, config := App_Config{}) {
 	rl.SetExitKey(.KEY_NULL) // Esc closes the palette, not the app.
 	load_app_font()
 	rl.GuiSetFont(app_font)
+	if app_font_is_default {
+		rl.SetTextureFilter(app_font.texture, .BILINEAR)
+	}
 
 	app.ui_scale_zoom = settings.ui_scale_zoom
 	app.ui_scale = clamp(detect_base_ui_scale() * app.ui_scale_zoom, UI_SCALE_MIN, UI_SCALE_MAX)
@@ -623,7 +626,9 @@ plot_zoom_update :: proc(
 	mouse_x, mouse_y, wheel: f64,
 	reset: bool,
 	centered: bool = false,
-) -> (x_min, x_max, y_min, y_max: f64) {
+) -> (
+	x_min, x_max, y_min, y_max: f64,
+) {
 	if !state.initialized ||
 	   !same_value(state.base_x_min, base_x_min) ||
 	   !same_value(state.base_x_max, base_x_max) ||
@@ -682,7 +687,9 @@ plot_zoom_bounds :: proc(
 	plot_area: rl.Rectangle,
 	base_x_min, base_x_max, base_y_min, base_y_max: f64,
 	centered: bool = false,
-) -> (x_min, x_max, y_min, y_max: f64) {
+) -> (
+	x_min, x_max, y_min, y_max: f64,
+) {
 	mouse := rl.GetMousePosition()
 	wheel := f64(0)
 	reset := false
@@ -700,8 +707,8 @@ plot_zoom_bounds :: proc(
 	if plot_area.width <= 0 || plot_area.height <= 0 {
 		return base_x_min, base_x_max, base_y_min, base_y_max
 	}
-	fx := f64(mouse.x-plot_area.x) / f64(plot_area.width)
-	fy := 1 - f64(mouse.y-plot_area.y) / f64(plot_area.height)
+	fx := f64(mouse.x - plot_area.x) / f64(plot_area.width)
+	fy := 1 - f64(mouse.y - plot_area.y) / f64(plot_area.height)
 	return plot_zoom_update(
 		&app.results.plot_zoom[plot_id],
 		base_x_min,
@@ -750,7 +757,7 @@ draw_plot_axis_labels :: proc(
 	y_ts := rl.MeasureTextEx(app_font, y_lbl_cstr, label_size, 1)
 	y_pos := rl.Vector2{rect.x + 4 * sc, plot_area.y + plot_area.height * 0.5}
 	y_origin := rl.Vector2{y_ts.x * 0.5, y_ts.y * 0.5}
-	rl.DrawTextPro(app_font, y_lbl_cstr, y_pos, y_origin, -90, label_size, 1, theme.text)
+	draw_text_pro(y_lbl_cstr, y_pos, y_origin, -90, label_size, 1, theme.text)
 }
 
 // Draws a hover tooltip near `mouse`, kept inside `plot_area`, for the given
@@ -796,7 +803,7 @@ draw_tooltip :: proc(
 	draw_stroke_rounded(tip, theme.border, UI_RADIUS_SM * sc, 1)
 	y_off := tip_y + pad
 	for cstr in cstrs {
-		rl.DrawTextEx(app_font, cstr, rl.Vector2{tip_x + pad, y_off}, fs, 1, theme.text)
+		draw_text_ex(cstr, rl.Vector2{tip_x + pad, y_off}, fs, 1, theme.text)
 		y_off += line_h + 2
 	}
 }
@@ -890,7 +897,7 @@ draw_plot_colorbar :: proc(
 		lbl_size := i32(font_size - 2)
 		ts := rl.MeasureTextEx(app_font, lbl_c, f32(lbl_size), 1)
 		pos := rl.Vector2{bar.x - 6 * sc, bar.y + bar.height * 0.5 + ts.x * 0.5}
-		rl.DrawTextPro(app_font, lbl_c, pos, {0, 0}, -90, f32(lbl_size), 1, theme.text)
+		draw_text_pro(lbl_c, pos, {0, 0}, -90, f32(lbl_size), 1, theme.text)
 	}
 }
 
@@ -1100,8 +1107,10 @@ plot_series :: proc(
 					plot_area.y +
 					plot_area.height -
 					f32((p[1] - y_min) / y_range) * plot_area.height
-				if sx < plot_area.x || sx > plot_area.x + plot_area.width ||
-				   sy < plot_area.y || sy > plot_area.y + plot_area.height {
+				if sx < plot_area.x ||
+				   sx > plot_area.x + plot_area.width ||
+				   sy < plot_area.y ||
+				   sy > plot_area.y + plot_area.height {
 					continue
 				}
 				dx := f64(mouse.x - sx)
@@ -1258,7 +1267,10 @@ plot_polar :: proc(
 		frac := f32(i) / 4.0
 		rr := radius_px * frac
 		rl.DrawCircleLines(i32(cx), i32(cy), rr, theme.grid)
-		lbl := strings.clone_to_cstring(fmt.tprintf("%.3g", f64(frac) * r_max), context.temp_allocator)
+		lbl := strings.clone_to_cstring(
+			fmt.tprintf("%.3g", f64(frac) * r_max),
+			context.temp_allocator,
+		)
 		tw := f32(measure_text(lbl, font_size - 2))
 		draw_text(
 			lbl,
@@ -1284,20 +1296,14 @@ plot_polar :: proc(
 		lbl := strings.clone_to_cstring(fmt.tprintf("%.0f°", f64(deg)), context.temp_allocator)
 		tw := f32(measure_text(lbl, font_size - 2))
 		th := f32(font_size - 2)
-		draw_text(
-			lbl,
-			i32(lx - tw * 0.5),
-			i32(ly - th * 0.5),
-			font_size - 2,
-			theme.text,
-		)
+		draw_text(lbl, i32(lx - tw * 0.5), i32(ly - th * 0.5), font_size - 2, theme.text)
 	}
 
 	// Radius axis label (rotated) and angle label.
 	r_lbl_c := strings.clone_to_cstring(radius_label, context.temp_allocator)
 	r_ts := rl.MeasureTextEx(app_font, r_lbl_c, f32(font_size), 1)
 	r_pos := rl.Vector2{rect.x + 4 * sc, cy + r_ts.y * 0.5}
-	rl.DrawTextPro(app_font, r_lbl_c, r_pos, {r_ts.x * 0.5, r_ts.y * 0.5}, -90, f32(font_size), 1, theme.text)
+	draw_text_pro(r_lbl_c, r_pos, {r_ts.x * 0.5, r_ts.y * 0.5}, -90, f32(font_size), 1, theme.text)
 
 	a_lbl_c := strings.clone_to_cstring(angle_label, context.temp_allocator)
 	draw_text(
@@ -1335,7 +1341,13 @@ plot_polar :: proc(
 			x2, y2 := project(pts[i + 1], cx, cy, radius_px, r_max)
 			col := base_color
 			if hue != nil && hue_ok && !math.is_nan(hue[i]) && !math.is_nan(hue[i + 1]) {
-				col = hue_lookup(hue_lo, hue_hi, (hue[i] + hue[i + 1]) * 0.5, theme.axis_x, theme.axis_z)
+				col = hue_lookup(
+					hue_lo,
+					hue_hi,
+					(hue[i] + hue[i + 1]) * 0.5,
+					theme.axis_x,
+					theme.axis_z,
+				)
 			}
 			rl.DrawLineEx(rl.Vector2{x1, y1}, rl.Vector2{x2, y2}, line_w, col)
 		}
@@ -1369,8 +1381,10 @@ plot_polar :: proc(
 			for s_idx in 0 ..< len(series) {
 				for p, k in series[s_idx].points {
 					sx, sy := project(p, cx, cy, radius_px, r_max)
-					if sx < plot_area.x || sx > plot_area.x + plot_area.width ||
-					   sy < plot_area.y || sy > plot_area.y + plot_area.height {
+					if sx < plot_area.x ||
+					   sx > plot_area.x + plot_area.width ||
+					   sy < plot_area.y ||
+					   sy > plot_area.y + plot_area.height {
 						continue
 					}
 					dx := f64(mouse.x - sx)
@@ -1388,9 +1402,16 @@ plot_polar :: proc(
 			if best_idx >= 0 && best_dist < threshold {
 				sx, sy := project(best_pt, cx, cy, radius_px, r_max)
 				hover_col := PLOT_COLORS[best_idx % len(PLOT_COLORS)]
-				if h := series[best_idx].hue; h != nil && hue_ok && best_k >= 0 && best_k < len(h) {
+				if h := series[best_idx].hue;
+				   h != nil && hue_ok && best_k >= 0 && best_k < len(h) {
 					if !math.is_nan(h[best_k]) {
-						hover_col = hue_lookup(hue_lo, hue_hi, h[best_k], theme.axis_x, theme.axis_z)
+						hover_col = hue_lookup(
+							hue_lo,
+							hue_hi,
+							h[best_k],
+							theme.axis_x,
+							theme.axis_z,
+						)
 					}
 				}
 				rl.DrawCircleLines(i32(sx), i32(sy), 6 * sc, theme.text)
@@ -1407,8 +1428,13 @@ plot_polar :: proc(
 				lines[n] = fmt.tprintf("θ=%.4f°  r=%.4f", theta, best_pt[1])
 				n += 1
 				if h := series[best_idx].hue;
-				   h != nil && hue_ok && best_k >= 0 && best_k < len(h) && !math.is_nan(h[best_k]) {
-					name := series[best_idx].hue_name if len(series[best_idx].hue_name) > 0 else "hue"
+				   h != nil &&
+				   hue_ok &&
+				   best_k >= 0 &&
+				   best_k < len(h) &&
+				   !math.is_nan(h[best_k]) {
+					name :=
+						series[best_idx].hue_name if len(series[best_idx].hue_name) > 0 else "hue"
 					lines[n] = fmt.tprintf("%s=%.4g", name, h[best_k])
 					n += 1
 				}
@@ -1419,7 +1445,17 @@ plot_polar :: proc(
 
 	// Save PNG (shared widget, see plot_export.odin).
 	if plot_save_button(app, rect, title, theme, sc) {
-		plot_export_polar(app, series, title, angle_label, radius_label, rect, theme, font_size, sc)
+		plot_export_polar(
+			app,
+			series,
+			title,
+			angle_label,
+			radius_label,
+			rect,
+			theme,
+			font_size,
+			sc,
+		)
 	}
 }
 
@@ -1644,11 +1680,20 @@ plot_histogram :: proc(
 		bin_max := f64(min_val) + f64(i + 1) * f64(data_range) / f64(n_bars)
 		bx_min := plot_area.x + f32((bin_min - view_x_min) / x_view_range) * plot_area.width
 		bx_max := plot_area.x + f32((bin_max - view_x_min) / x_view_range) * plot_area.width
-		base_y := plot_area.y + plot_area.height -
+		base_y :=
+			plot_area.y +
+			plot_area.height -
 			f32((0 - view_y_min) / y_view_range) * plot_area.height
-		count_y := plot_area.y + plot_area.height -
+		count_y :=
+			plot_area.y +
+			plot_area.height -
 			f32((f64(counts[i]) - view_y_min) / y_view_range) * plot_area.height
-		bar_rect := rl.Rectangle{bx_min, min(base_y, count_y), bx_max - bx_min, abs(base_y - count_y)}
+		bar_rect := rl.Rectangle {
+			bx_min,
+			min(base_y, count_y),
+			bx_max - bx_min,
+			abs(base_y - count_y),
+		}
 		rl.DrawRectangleRec(bar_rect, theme.axis_x)
 		rl.DrawRectangleLinesEx(bar_rect, 1, theme.border)
 
@@ -1810,22 +1855,23 @@ plot_histogram_2d :: proc(
 			cell_x_max := min_x + f64(ix + 1) * data_x_range / f64(n_bx)
 			cell_y_min := min_y + f64(iy) * data_y_range / f64(n_by)
 			cell_y_max := min_y + f64(iy + 1) * data_y_range / f64(n_by)
-			if cell_x_max < view_x_min || cell_x_min > view_x_max ||
-			   cell_y_max < view_y_min || cell_y_min > view_y_max {
+			if cell_x_max < view_x_min ||
+			   cell_x_min > view_x_max ||
+			   cell_y_max < view_y_min ||
+			   cell_y_min > view_y_max {
 				continue
 			}
 			x0 := plot_area.x + f32((cell_x_min - view_x_min) / x_view_range) * plot_area.width
 			x1 := plot_area.x + f32((cell_x_max - view_x_min) / x_view_range) * plot_area.width
-			y0 := plot_area.y + plot_area.height -
+			y0 :=
+				plot_area.y +
+				plot_area.height -
 				f32((cell_y_max - view_y_min) / y_view_range) * plot_area.height
-			y1 := plot_area.y + plot_area.height -
+			y1 :=
+				plot_area.y +
+				plot_area.height -
 				f32((cell_y_min - view_y_min) / y_view_range) * plot_area.height
-			cell := rl.Rectangle {
-				x0,
-				y0,
-				x1 - x0,
-				y1 - y0,
-			}
+			cell := rl.Rectangle{x0, y0, x1 - x0, y1 - y0}
 			t := f32(c) / f32(max_count)
 			col := color_lerp(theme.axis_x, theme.axis_z, t)
 			rl.DrawRectangleRec(cell, col)
@@ -1875,13 +1921,14 @@ plot_histogram_2d :: proc(
 	}
 
 	if rl.CheckCollisionPointRec(mouse, plot_area) {
-		x_value := view_x_min + f64(mouse.x-plot_area.x) / f64(plot_area.width) * x_view_range
-		y_value := view_y_min +
-			f64(plot_area.y+plot_area.height-mouse.y) / f64(plot_area.height) * y_view_range
+		x_value := view_x_min + f64(mouse.x - plot_area.x) / f64(plot_area.width) * x_view_range
+		y_value :=
+			view_y_min +
+			f64(plot_area.y + plot_area.height - mouse.y) / f64(plot_area.height) * y_view_range
 		if x_value >= min_x && x_value <= max_x && y_value >= min_y && y_value <= max_y {
-			hover_ix = clamp(int((x_value-min_x)/data_x_range*f64(n_bx)), 0, n_bx-1)
-			hover_iy = clamp(int((y_value-min_y)/data_y_range*f64(n_by)), 0, n_by-1)
-			hover_count = int(counts[hover_iy*n_bx+hover_ix])
+			hover_ix = clamp(int((x_value - min_x) / data_x_range * f64(n_bx)), 0, n_bx - 1)
+			hover_iy = clamp(int((y_value - min_y) / data_y_range * f64(n_by)), 0, n_by - 1)
+			hover_count = int(counts[hover_iy * n_bx + hover_ix])
 		}
 	}
 

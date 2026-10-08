@@ -6,6 +6,7 @@ package palantir
 // command palette. Every UI and plot-export text path uses the active font.
 
 import "core:c"
+import "core:math"
 import rl "vendor:raylib"
 
 // The font file, pulled into the data section at build time by `#load`.
@@ -23,9 +24,8 @@ app_font_is_default: bool
 // raylib's built-in default font.
 load_app_font :: proc() {
 	app_font = rl.GetFontDefault()
-	// The built-in font is a low-resolution bitmap atlas. Keep it on nearest-
-	// neighbor sampling even when the custom font is the currently active one.
-	rl.SetTextureFilter(app_font.texture, .POINT)
+	// Smooth the built-in bitmap when scaled to UI text sizes.
+	rl.SetTextureFilter(app_font.texture, .BILINEAR)
 	app_custom_font = rl.GetFontDefault()
 	app_font_loaded = false
 	app_font_is_default = true
@@ -107,13 +107,14 @@ toggle_app_font :: proc() -> bool {
 	app_font_is_default = !app_font_is_default
 	if app_font_is_default {
 		app_font = rl.GetFontDefault()
-		// The built-in atlas is low-resolution bitmap art; linear filtering
-		// smears its glyphs when the UI scales it above the native size.
-		rl.SetTextureFilter(app_font.texture, .POINT)
 	} else {
 		app_font = app_custom_font
 	}
 	rl.GuiSetFont(app_font)
+	if app_font_is_default {
+		// Keep the built-in font bilinear after changing raygui's font.
+		rl.SetTextureFilter(app_font.texture, .BILINEAR)
+	}
 	return true
 }
 
@@ -127,9 +128,29 @@ unload_app_font :: proc() {
 	app_font_is_default = true
 }
 
+// The built-in bitmap looks soft when placed at fractional screen positions.
+// Keep the scalable font's subpixel positioning unchanged.
+snap_default_text_position :: proc(position: rl.Vector2) -> rl.Vector2 {
+	if app_font_is_default {
+		return {f32(math.round(position.x)), f32(math.round(position.y))}
+	}
+	return position
+}
+
+draw_text_ex :: proc(text: cstring, position: rl.Vector2, font_size, spacing: f32, color: rl.Color) {
+	rl.DrawTextEx(app_font, text, snap_default_text_position(position), font_size, spacing, color)
+}
+
+draw_text_pro :: proc(text: cstring, position, origin: rl.Vector2, rotation, font_size, spacing: f32, color: rl.Color) {
+	rl.DrawTextPro(
+		app_font, text, snap_default_text_position(position), snap_default_text_position(origin),
+		rotation, font_size, spacing, color,
+	)
+}
+
 // Equivalent of `rl.DrawText` but rendered with the app font.
 draw_text :: proc(text: cstring, x, y, font_size: i32, color: rl.Color) {
-	rl.DrawTextEx(app_font, text, {f32(x), f32(y)}, f32(font_size), 0, color)
+	draw_text_ex(text, {f32(x), f32(y)}, f32(font_size), 0, color)
 }
 
 // Equivalent of `rl.MeasureText` but measured with the app font.

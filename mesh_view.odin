@@ -177,8 +177,8 @@ mesh_view_update :: proc(mv: ^Mesh_View, rect: rl.Rectangle, active: bool) {
 
 	if rl.IsMouseButtonDown(.RIGHT) {
 		delta := rl.GetMouseDelta()
-		mv.yaw -= delta.x * 0.003
-		mv.pitch += delta.y * 0.003
+		mv.yaw += delta.x * 0.003
+		mv.pitch -= delta.y * 0.003
 		mv.pitch = clamp(mv.pitch, -1.55, 1.55)
 	}
 

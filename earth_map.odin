@@ -503,7 +503,7 @@ draw_legend :: proc(
 		y := by + pad + f32(i) * row_h
 		swatch := rl.Rectangle{bx + pad, y, 12 * sc, 12 * sc}
 		draw_fill_rounded(swatch, routes[i].color, 3)
-		rl.DrawTextEx(app_font, names[i], rl.Vector2{bx + pad + 18 * sc, y}, fs, 1, theme.text)
+		draw_text_ex(names[i], rl.Vector2{bx + pad + 18 * sc, y}, fs, 1, theme.text)
 	}
 }
 
