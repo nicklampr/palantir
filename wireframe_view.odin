@@ -80,7 +80,7 @@ draw_wireframe_view :: proc(
 		view_fit_bounds(mv, minp, maxp)
 		mv.fit = false
 	}
-	active := !app.palette.open && !results_any_dropdown_open(rs)
+	active := !app.palette.open && !rs.dock_resize_input && !results_any_dropdown_open(rs)
 	mesh_view_update(mv, rect, active)
 
 	cam := rl.Camera3D {

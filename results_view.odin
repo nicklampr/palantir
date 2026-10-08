@@ -104,6 +104,12 @@ Plot_Columns :: struct {
 	lat, lon: string,
 }
 
+Dock_Resize :: enum {
+	None,
+	Left,
+	Bottom,
+}
+
 Results_State :: struct {
 	root:              string,
 	entries:           []File_Entry,
@@ -128,9 +134,15 @@ Results_State :: struct {
 	// Command-palette folder navigation: parent + subdirectories of `root`,
 	// rebuilt whenever the folder is rescanned. Owns the name/path strings.
 	folder_cmds:       [dynamic]Palette_Command,
-	show_left_panel:   bool,
-	show_bottom_panel: bool,
-	show_recents:      bool,
+	show_left_panel:     bool,
+	show_bottom_panel:   bool,
+	left_panel_width:    f32, // UI units, independent of zoom
+	bottom_panel_height: f32, // 0 keeps the automatic default height
+	dock_resize:         Dock_Resize,
+	dock_drag_mouse:     f32,
+	dock_drag_size:      f32,
+	dock_resize_input:   bool, // drag or release owns this frame's mouse input
+	show_recents:        bool,
 	search_buf:        [256]u8,
 	search_len:        int,
 	search_edit:       bool,
@@ -193,6 +205,10 @@ results_init :: proc(app: ^App) {
 	}
 	rs.show_left_panel = true
 	rs.show_bottom_panel = true
+	rs.left_panel_width = 320
+	rs.bottom_panel_height = 0
+	rs.dock_resize = .None
+	rs.dock_resize_input = false
 	rs.mesh_view = mesh_view_init()
 	rs.quiver_view = mesh_view_init()
 	rs.wireframe_view = mesh_view_init()
@@ -426,6 +442,13 @@ results_set_root :: proc(app: ^App, path: string) {
 		delete(rs.root)
 	}
 	rs.root = new_root
+	// A file filter belongs to the folder it was typed in. Show the full
+	// contents from the top when browsing into a different folder.
+	rs.search_len = 0
+	rs.search_buf[0] = 0
+	rs.search_edit = false
+	rs.file_scroll.offset = 0
+	rs.file_scroll.dragging = false
 	// Remember the folder so the Recents view shows recent folders.
 	results_add_recent_folder(app, new_root)
 	// Keep the path input box in sync with the current folder.
@@ -865,10 +888,12 @@ open_recents_view :: proc(app: ^App) {
 
 results_toggle_left_panel :: proc(app: ^App) {
 	app.results.show_left_panel = !app.results.show_left_panel
+	save_settings(app)
 }
 
 results_toggle_bottom_panel :: proc(app: ^App) {
 	app.results.show_bottom_panel = !app.results.show_bottom_panel
+	save_settings(app)
 }
 
 // Focuses the file-browser search box (Ctrl+F / "Find files").
@@ -1068,6 +1093,74 @@ active_dataset :: proc(rs: ^Results_State) -> ^Dataset {
 
 // --- main view ---------------------------------------------------------------
 
+// Keep both the file dock and the plot usable, including after shrinking the
+// window or changing UI zoom. The stored sizes remain in zoom-independent units.
+results_dock_limits :: proc(sw, sh, body_top, sc: f32) -> (left_min, left_max, bottom_min, bottom_max: f32) {
+	width := max(sw - 30 * sc, 0) // margins and the gap between panels
+	left_min = min(180 * sc, width * 0.5)
+	left_max = max(left_min, width - min(320 * sc, width * 0.5))
+
+	height := max(sh - body_top - 10 * sc, 0)
+	bottom_min = min(120 * sc, height * 0.5)
+	bottom_max = max(bottom_min, height - min(200 * sc, height * 0.5))
+	return
+}
+
+results_dock_sizes :: proc(rs: ^Results_State, sw, sh, body_top, sc: f32) -> (left_w, bottom_h: f32) {
+	left_min, left_max, bottom_min, bottom_max := results_dock_limits(sw, sh, body_top, sc)
+	left_w = clamp(rs.left_panel_width * sc, left_min, left_max)
+	requested_h := rs.bottom_panel_height * sc if rs.bottom_panel_height > 0 else clamp(sh * 0.14, 160 * sc, 220 * sc)
+	bottom_h = clamp(requested_h, bottom_min, bottom_max)
+	return
+}
+
+// The gaps between docks are drag handles. Consume the release before any
+// buttons or file rows can interpret it as a click; persist only on release.
+results_dock_resize_update :: proc(app: ^App, sw, sh, body_top, sc: f32) -> (left_hover, bottom_hover: bool) {
+	rs := &app.results
+	pad := 10 * sc
+	left_w, bottom_h := results_dock_sizes(rs, sw, sh, body_top, sc)
+	body_bottom := sh - pad - bottom_h if rs.show_bottom_panel else sh - pad
+	mouse := rl.GetMousePosition()
+	left_grip := rl.Rectangle{pad + left_w + pad * 0.5 - 5 * sc, body_top, 10 * sc, max(body_bottom - body_top, 0)}
+	bottom_grip := rl.Rectangle{pad, body_bottom + pad * 0.5 - 5 * sc, max(sw - 2 * pad, 0), 10 * sc}
+	can_start := !app.palette.open && !results_any_dropdown_open(rs)
+	left_hover = can_start && rs.show_left_panel && rl.CheckCollisionPointRec(mouse, left_grip)
+	bottom_hover = can_start && rs.show_bottom_panel && rl.CheckCollisionPointRec(mouse, bottom_grip)
+
+	if rs.dock_resize == .None && can_start && rl.IsMouseButtonPressed(.LEFT) {
+		if left_hover {
+			rs.dock_resize = .Left
+			rs.dock_drag_mouse = mouse.x
+			rs.dock_drag_size = left_w
+		} else if bottom_hover {
+			rs.dock_resize = .Bottom
+			rs.dock_drag_mouse = mouse.y
+			rs.dock_drag_size = bottom_h
+		}
+	}
+	if rs.dock_resize != .None {
+		rs.dock_resize_input = true
+		left_min, left_max, bottom_min, bottom_max := results_dock_limits(sw, sh, body_top, sc)
+		switch rs.dock_resize {
+		case .Left:
+			rs.left_panel_width = clamp(rs.dock_drag_size + mouse.x - rs.dock_drag_mouse, left_min, left_max) / sc
+		case .Bottom:
+			rs.bottom_panel_height = clamp(rs.dock_drag_size + rs.dock_drag_mouse - mouse.y, bottom_min, bottom_max) / sc
+		case .None:
+		}
+		if !rl.IsMouseButtonDown(.LEFT) || !can_start {
+			rs.dock_resize = .None
+			save_settings(app)
+		}
+	}
+	cursor: rl.MouseCursor = .DEFAULT
+	if rs.dock_resize == .Left || left_hover {cursor = .RESIZE_EW}
+	if rs.dock_resize == .Bottom || bottom_hover {cursor = .RESIZE_NS}
+	rl.SetMouseCursor(cursor)
+	return
+}
+
 draw_results_view :: proc(app: ^App) {
 	t := app.themes[app.theme_index]
 	sc := app.ui_scale
@@ -1075,6 +1168,7 @@ draw_results_view :: proc(app: ^App) {
 	sh := f32(rl.GetScreenHeight())
 	rs := &app.results
 	rs.text_enter = false
+	rs.dock_resize_input = rs.dock_resize != .None
 
 	results_handle_shortcuts(app)
 
@@ -1141,13 +1235,13 @@ draw_results_view :: proc(app: ^App) {
 	if rs.path_edit && rl.IsKeyPressed(.TAB) {
 		results_complete_path(app)
 	}
-	if draw_button(up_rect, "Up", t, sc) {
+	if draw_button(up_rect, "Up", t, sc, !rs.dock_resize_input) {
 		results_go_up(app)
 	}
-	if draw_button(recents_rect, "Recents", t, sc) {
+	if draw_button(recents_rect, "Recents", t, sc, !rs.dock_resize_input) {
 		rs.show_recents = true
 	}
-	if draw_button(left_toggle_rect, "Left On" if rs.show_left_panel else "Left Off", t, sc) {
+	if draw_button(left_toggle_rect, "Left On" if rs.show_left_panel else "Left Off", t, sc, !rs.dock_resize_input) {
 		results_toggle_left_panel(app)
 	}
 	if draw_button(
@@ -1155,10 +1249,11 @@ draw_results_view :: proc(app: ^App) {
 		"Bottom On" if rs.show_bottom_panel else "Bottom Off",
 		t,
 		sc,
+		!rs.dock_resize_input,
 	) {
 		results_toggle_bottom_panel(app)
 	}
-	if draw_button(refresh_rect, "Refresh", t, sc) {
+	if draw_button(refresh_rect, "Refresh", t, sc, !rs.dock_resize_input) {
 		results_refresh(app)
 	}
 
@@ -1168,13 +1263,11 @@ draw_results_view :: proc(app: ^App) {
 	}
 
 	// --- layout -------------------------------------------------------------
-	// Keep the raw table a fixed-ish strip (caps at ~14% of the screen) so on
-	// tall 4K windows the plot panel always absorbs the extra vertical space.
 	msg_gap := f32(18 * sc) if rs.msg != "" else 0
-	bottom_h := clamp(sh * 0.14, 160 * sc, 220 * sc)
 	body_top := top + bar_h + pad + msg_gap
+	left_hover, bottom_hover := results_dock_resize_update(app, sw, sh, body_top, sc)
+	left_w, bottom_h := results_dock_sizes(rs, sw, sh, body_top, sc)
 	body_bottom := sh - bottom_h - pad if rs.show_bottom_panel else sh - pad
-	left_w := 320 * sc
 	left := rl.Rectangle{pad, body_top, left_w, body_bottom - body_top}
 	right := rl.Rectangle{pad, body_top, sw - 2 * pad, body_bottom - body_top}
 	if rs.show_left_panel {
@@ -1202,6 +1295,18 @@ draw_results_view :: proc(app: ^App) {
 	// --- bottom panel: raw data ---------------------------------------------
 	if rs.show_bottom_panel {
 		draw_raw_table(app, raw)
+	}
+
+	// Subtle visible dividers, with a stronger highlight on hover or drag.
+	if rs.show_left_panel {
+		x := left.x + left.width + pad * 0.5
+		color := t.accent if left_hover || rs.dock_resize == .Left else t.border
+		rl.DrawRectangleRec({x - sc, body_top + 8 * sc, 2 * sc, max(body_bottom - body_top - 16 * sc, 0)}, color)
+	}
+	if rs.show_bottom_panel {
+		y := body_bottom + pad * 0.5
+		color := t.accent if bottom_hover || rs.dock_resize == .Bottom else t.border
+		rl.DrawRectangleRec({pad + 8 * sc, y - sc, max(sw - 2 * pad - 16 * sc, 0), 2 * sc}, color)
 	}
 }
 
@@ -1410,6 +1515,7 @@ draw_file_browser :: proc(app: ^App, panel: rl.Rectangle) {
 	mouse := rl.GetMousePosition()
 	track := scroll_track(viewport, sc)
 	if !app.palette.open &&
+	   !rs.dock_resize_input &&
 	   !was_scroll_drag &&
 	   rl.IsMouseButtonReleased(.LEFT) &&
 	   rl.CheckCollisionPointRec(mouse, viewport) &&
@@ -1512,12 +1618,12 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 	)
 
 	clear_rect := rl.Rectangle{panel.x + panel.width - 92 * sc, panel.y + 6 * sc, 80 * sc, 24 * sc}
-	if draw_button(clear_rect, "Clear", t, sc) {
+	if draw_button(clear_rect, "Clear", t, sc, !rs.dock_resize_input) {
 		results_clear_recents(app)
 	}
 
 	back_rect := rl.Rectangle{panel.x + 10 * sc, panel.y + title_h + 4 * sc, 120 * sc, 26 * sc}
-	if draw_button(back_rect, "Browse", t, sc) {
+	if draw_button(back_rect, "Browse", t, sc, !rs.dock_resize_input) {
 		rs.show_recents = false
 	}
 
@@ -1567,6 +1673,7 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 	mouse := rl.GetMousePosition()
 	track := scroll_track(viewport, sc)
 	if !app.palette.open &&
+	   !rs.dock_resize_input &&
 	   !was_scroll_drag &&
 	   rl.IsMouseButtonReleased(.LEFT) &&
 	   rl.CheckCollisionPointRec(mouse, viewport) &&
@@ -1679,7 +1786,7 @@ draw_plot_selector :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32)
 
 		if rl.IsKeyPressed(.ESCAPE) && !app.palette.open {
 			rs.plot.plot_open = false
-		} else if rl.IsMouseButtonReleased(.LEFT) {
+		} else if !rs.dock_resize_input && rl.IsMouseButtonReleased(.LEFT) {
 			if header_hover {
 				rs.plot.plot_open = false
 			} else if rl.CheckCollisionPointRec(mouse, popup) {
@@ -1704,7 +1811,7 @@ draw_plot_selector :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32)
 				rs.plot.plot_open = false
 			}
 		}
-	} else if header_hover && rl.IsMouseButtonReleased(.LEFT) && !app.palette.open {
+	} else if header_hover && !rs.dock_resize_input && rl.IsMouseButtonReleased(.LEFT) && !app.palette.open {
 		results_close_column_popups(rs)
 		rs.plot.plot_open = true
 	}
@@ -2489,6 +2596,7 @@ draw_dropdown :: proc(
 
 	if rl.CheckCollisionPointRec(mouse, rect) &&
 	   rl.IsMouseButtonReleased(.LEFT) &&
+	   !app.results.dock_resize_input &&
 	   !app.palette.open {
 		if !open^ {
 			results_close_column_popups(&app.results, open)
@@ -2650,7 +2758,7 @@ draw_dropdown :: proc(
 				i32(12 * sc),
 				theme.text,
 			)
-			if item_hover && rl.IsMouseButtonReleased(.LEFT) {
+			if item_hover && !rs.dock_resize_input && rl.IsMouseButtonReleased(.LEFT) {
 				sel^ = actual
 				open^ = false
 			}
@@ -3158,7 +3266,7 @@ format_cell :: proc(col: ^Column, row: int) -> string {
 
 // --- small widgets -----------------------------------------------------------
 
-draw_button :: proc(rect: rl.Rectangle, label: cstring, theme: Theme, sc: f32) -> bool {
+draw_button :: proc(rect: rl.Rectangle, label: cstring, theme: Theme, sc: f32, allow_input := true) -> bool {
 	mouse := rl.GetMousePosition()
 	hover := rl.CheckCollisionPointRec(mouse, rect)
 	pressed := hover && rl.IsMouseButtonDown(.LEFT)
@@ -3179,7 +3287,7 @@ draw_button :: proc(rect: rl.Rectangle, label: cstring, theme: Theme, sc: f32) -
 		i32(13 * sc),
 		theme.text,
 	)
-	return hover && rl.IsMouseButtonReleased(.LEFT)
+	return allow_input && hover && rl.IsMouseButtonReleased(.LEFT)
 }
 
 // Minimal text input. Returns true when Enter is pressed. `hint` (optional) is

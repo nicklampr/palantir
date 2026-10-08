@@ -364,7 +364,7 @@ draw_mesh_view :: proc(
 		}
 	}
 
-	active := !app.palette.open && !results_any_dropdown_open(&app.results)
+	active := !app.palette.open && !app.results.dock_resize_input && !results_any_dropdown_open(&app.results)
 	mesh_view_update(mv, rect, active)
 
 	// Lazy-load the unlit shader so the scalar vertex colors show at full
@@ -476,7 +476,7 @@ draw_mesh_view :: proc(
 	if mv.wireframe {
 		label = "Wireframe"
 	}
-	if draw_button(toggle, label, theme, sc) {
+	if draw_button(toggle, label, theme, sc, !app.results.dock_resize_input) {
 		mv.wireframe = !mv.wireframe
 	}
 	hint := strings.clone_to_cstring("WASD move · right-drag look · wheel speed", context.temp_allocator)

@@ -77,6 +77,12 @@ App_Settings :: struct {
 	theme_index:    int,
 	window_width:   i32,
 	window_height:  i32,
+	// False when absent in settings saved by older versions (both panels visible).
+	left_panel_hidden:   bool,
+	bottom_panel_hidden: bool,
+	// Sizes in unscaled UI units (0 means use the original default).
+	left_panel_width:   f32,
+	bottom_panel_height: f32,
 	// Multiplier on the auto-detected UI scale; adjustable live with +/-/0.
 	ui_scale_zoom:  f32,
 	// Recently browsed folders (most recent first).
@@ -181,6 +187,10 @@ save_settings :: proc(app: ^App) {
 			theme_index    = app.theme_index,
 			window_width   = i32(math.round(f32(rl.GetScreenWidth()) / scl)),
 			window_height  = i32(math.round(f32(rl.GetScreenHeight()) / scl)),
+			left_panel_hidden   = !app.results.show_left_panel,
+			bottom_panel_hidden = !app.results.show_bottom_panel,
+			left_panel_width    = app.results.left_panel_width,
+			bottom_panel_height = app.results.bottom_panel_height,
 			ui_scale_zoom  = app.ui_scale_zoom,
 			recent_folders = app.recents,
 			plot_id        = app.results.plot.id,
@@ -389,8 +399,16 @@ app_init :: proc(app: ^App, config := App_Config{}) {
 
 	app.recents = settings.recent_folders
 	results_init(app)
-	// Restore the last plot type and column selections (by name).
+	// Restore panel visibility and the last plot/column selections.
 	rs := &app.results
+	rs.show_left_panel = !settings.left_panel_hidden
+	rs.show_bottom_panel = !settings.bottom_panel_hidden
+	if settings.left_panel_width > 0 {
+		rs.left_panel_width = settings.left_panel_width
+	}
+	if settings.bottom_panel_height > 0 {
+		rs.bottom_panel_height = settings.bottom_panel_height
+	}
 	rs.remembered = Plot_Columns {
 		x   = settings.plot_x_col,
 		y   = settings.plot_y_col,
@@ -1524,7 +1542,7 @@ histogram_auto_bins :: proc(values: []f32) -> int {
 // Draws a small bin-count stepper (`- N +`) in the top-right corner of the
 // histogram. `bins` is the live value (0 = auto). Mutates `bins` when the
 // +/- buttons are pressed.
-histogram_bin_stepper :: proc(rect: rl.Rectangle, bins: ^int, theme: Theme, sc: f32) {
+histogram_bin_stepper :: proc(rect: rl.Rectangle, bins: ^int, theme: Theme, sc: f32, allow_input := true) {
 	btn_size := f32(18 * sc)
 	btn_y := rect.y + 2 * sc
 	gap := 2 * sc
@@ -1540,7 +1558,7 @@ histogram_bin_stepper :: proc(rect: rl.Rectangle, bins: ^int, theme: Theme, sc: 
 	label_rect := rl.Rectangle{minus_rect.x + minus_rect.width + gap, btn_y, label_w, btn_size}
 	plus_rect := rl.Rectangle{label_rect.x + label_rect.width + gap, btn_y, btn_size, btn_size}
 
-	draw_step_btn :: proc(r: rl.Rectangle, sym: cstring, theme: Theme, sc: f32) -> bool {
+	draw_step_btn :: proc(r: rl.Rectangle, sym: cstring, theme: Theme, sc: f32, allow_input: bool) -> bool {
 		mouse := rl.GetMousePosition()
 		hover := rl.CheckCollisionPointRec(mouse, r)
 		radius := 4 * sc
@@ -1554,17 +1572,17 @@ histogram_bin_stepper :: proc(rect: rl.Rectangle, bins: ^int, theme: Theme, sc: 
 			i32(11 * sc),
 			theme.text,
 		)
-		return hover && rl.IsMouseButtonReleased(.LEFT)
+		return allow_input && hover && rl.IsMouseButtonReleased(.LEFT)
 	}
 
-	if draw_step_btn(minus_rect, "-", theme, sc) && bins^ > 0 {
+	if draw_step_btn(minus_rect, "-", theme, sc, allow_input) && bins^ > 0 {
 		if bins^ < 2 {
 			bins^ = 0
 		} else {
 			bins^ -= 1
 		}
 	}
-	if draw_step_btn(plus_rect, "+", theme, sc) {
+	if draw_step_btn(plus_rect, "+", theme, sc, allow_input) {
 		if bins^ == 0 {
 			bins^ = 2
 		} else if bins^ < 200 {
@@ -1607,7 +1625,7 @@ plot_histogram :: proc(
 		// Skip the stepper during an offscreen PNG export so its +/- buttons can
 		// never catch the click that triggered the save.
 		if !app.exporting {
-			histogram_bin_stepper(rect, bins_edit, theme, sc)
+			histogram_bin_stepper(rect, bins_edit, theme, sc, !app.results.dock_resize_input)
 		}
 		n_bins = bins_edit^
 	}

@@ -42,6 +42,56 @@ test_walkthrough_palette_command :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_panel_visibility_settings :: proc(t: ^testing.T) {
+	defaults := default_settings()
+	testing.expect(t, !defaults.left_panel_hidden && !defaults.bottom_panel_hidden, "panels are visible with older settings")
+
+	saved := default_settings()
+	saved.left_panel_hidden = true
+	saved.bottom_panel_hidden = true
+	saved.left_panel_width = 420
+	saved.bottom_panel_height = 260
+	data, err := json.marshal(saved)
+	testing.expect(t, err == nil, "serialize panel visibility")
+	if err != nil {return}
+	defer delete(data)
+
+	restored := default_settings()
+	unmarshal_err := json.unmarshal(data, &restored)
+	testing.expect(t, unmarshal_err == nil, "deserialize panel visibility")
+	testing.expect(t, restored.left_panel_hidden && restored.bottom_panel_hidden, "hidden panels survive a settings roundtrip")
+	testing.expect(t, restored.left_panel_width == 420 && restored.bottom_panel_height == 260, "dock sizes survive a settings roundtrip")
+
+	app: App
+	results_init(&app)
+	defer results_destroy(&app)
+	default_left, default_bottom := results_dock_sizes(&app.results, 1920, 1080, 56, 1)
+	testing.expect(t, default_left == 320 && default_bottom == 160, "old settings retain the original dock sizes")
+	app.results.left_panel_width = restored.left_panel_width
+	app.results.bottom_panel_height = restored.bottom_panel_height
+	left_w, bottom_h := results_dock_sizes(&app.results, 1920, 1080, 56, 1)
+	testing.expect(t, left_w == 420 && bottom_h == 260, "saved sizes determine the panel layout")
+	left_w, bottom_h = results_dock_sizes(&app.results, 3840, 2160, 112, 2)
+	testing.expect(t, left_w == 840 && bottom_h == 520, "dock sizes follow UI zoom")
+
+	app.results.left_panel_width = 9000
+	app.results.bottom_panel_height = 9000
+	left_w, bottom_h = results_dock_sizes(&app.results, 800, 600, 56, 1)
+	_, left_max, _, bottom_max := results_dock_limits(800, 600, 56, 1)
+	testing.expect(t, left_w == left_max && bottom_h == bottom_max, "resizing leaves room for the plot")
+	app.results.left_panel_width = 1
+	app.results.bottom_panel_height = 1
+	left_w, bottom_h = results_dock_sizes(&app.results, 800, 600, 56, 1)
+	left_min, _, bottom_min, _ := results_dock_limits(800, 600, 56, 1)
+	testing.expect(t, left_w == left_min && bottom_h == bottom_min, "resizing keeps both docks usable")
+
+	results_toggle_left_panel(&app)
+	results_toggle_bottom_panel(&app)
+	testing.expect(t, !app.results.show_left_panel && !app.results.show_bottom_panel, "panel toggles hide both panels")
+	testing.expect(t, app.results.left_panel_width == 1 && app.results.bottom_panel_height == 1, "hiding panels retains their preferred sizes")
+}
+
+@(test)
 test_default_plot_selection :: proc(t: ^testing.T) {
 	settings := default_settings()
 	testing.expect(t, settings.plot_id == PLOT_SCATTER, "new settings should default to a 2D scatter plot")
@@ -286,6 +336,44 @@ test_folder_palette_selection :: proc(t: ^testing.T) {
 	// Selecting the parent entry ("..") must navigate without dangling.
 	results_handle_folder_select(&app, app.palette_folder_children[0].description)
 	testing.expect(t, app.results.root == "/tmp", "navigated to parent folder")
+}
+
+@(test)
+test_folder_navigation_clears_file_search :: proc(t: ^testing.T) {
+	app: App
+	results_init(&app)
+	defer results_destroy(&app)
+	defer {
+		for p in app.recents {delete(p)}
+		delete(app.recents)
+	}
+
+	base := fmt.tprintf("/tmp/palantir_search_root_%d", os.get_pid())
+	sub := fmt.tprintf("%s/subfolder", base)
+	file := fmt.tprintf("%s/sample.csv", sub)
+	defer os.remove_all(base)
+	testing.expect(t, os.make_directory(base) == nil, "create search root")
+	testing.expect(t, os.make_directory(sub) == nil, "create matching folder")
+	testing.expect(t, os.write_entire_file_from_string(file, "x,y\n1,2\n") == nil, "create file in folder")
+
+	results_set_root(&app, base)
+	query := "sub"
+	copy(app.results.search_buf[:], query)
+	app.results.search_len = len(query)
+	app.results.search_edit = true
+	app.results.file_scroll.offset = 60
+	filtered := results_filtered_entries(&app)
+	testing.expect(t, len(filtered) == 1 && app.results.entries[filtered[0]].is_dir, "filter finds the subfolder")
+	if len(filtered) == 0 {return}
+
+	// Mimic clicking the filtered folder row, whose path is owned by entries.
+	expected_root := strings.clone(app.results.entries[filtered[0]].path)
+	defer delete(expected_root)
+	results_set_root(&app, app.results.entries[filtered[0]].path)
+	testing.expect(t, app.results.root == expected_root, "navigated into filtered folder")
+	testing.expect(t, app.results.search_len == 0 && app.results.search_buf[0] == 0, "folder navigation clears search text")
+	testing.expect(t, !app.results.search_edit && app.results.file_scroll.offset == 0, "search focus and scroll reset")
+	testing.expect(t, len(results_filtered_entries(&app)) == 1, "new folder's files are visible")
 }
 
 @(test)

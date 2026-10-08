@@ -436,7 +436,7 @@ plot_quiver :: proc(
 	// Arrow-size multiplier stepper (hidden during offscreen export so its
 	// buttons can never catch the click that triggered the save).
 	if scale_edit != nil && !app.exporting {
-		quiver_scale_stepper(rect, scale_edit, theme, sc)
+		quiver_scale_stepper(rect, scale_edit, theme, sc, !app.results.dock_resize_input)
 	}
 }
 
@@ -447,7 +447,7 @@ QUIVER_SCALE_STEP :: 1.5
 // Draws a small `− N× +` stepper in the top-right corner of a quiver panel
 // (mirrors the histogram bin stepper). Multiplicative steps: + scales up by
 // QUIVER_SCALE_STEP, − down by the same amount. Mutates `scale`.
-quiver_scale_stepper :: proc(rect: rl.Rectangle, scale: ^f32, theme: Theme, sc: f32) {
+quiver_scale_stepper :: proc(rect: rl.Rectangle, scale: ^f32, theme: Theme, sc: f32, allow_input := true) {
 	btn_size := f32(18 * sc)
 	btn_y := rect.y + 2 * sc
 	gap := 2 * sc
@@ -463,7 +463,7 @@ quiver_scale_stepper :: proc(rect: rl.Rectangle, scale: ^f32, theme: Theme, sc: 
 	label_rect := rl.Rectangle{minus_rect.x + minus_rect.width + gap, btn_y, label_w, btn_size}
 	plus_rect := rl.Rectangle{label_rect.x + label_rect.width + gap, btn_y, btn_size, btn_size}
 
-	draw_step_btn :: proc(r: rl.Rectangle, sym: cstring, theme: Theme, sc: f32) -> bool {
+	draw_step_btn :: proc(r: rl.Rectangle, sym: cstring, theme: Theme, sc: f32, allow_input: bool) -> bool {
 		mouse := rl.GetMousePosition()
 		hover := rl.CheckCollisionPointRec(mouse, r)
 		radius := 4 * sc
@@ -477,13 +477,13 @@ quiver_scale_stepper :: proc(rect: rl.Rectangle, scale: ^f32, theme: Theme, sc: 
 			i32(11 * sc),
 			theme.text,
 		)
-		return hover && rl.IsMouseButtonReleased(.LEFT)
+		return allow_input && hover && rl.IsMouseButtonReleased(.LEFT)
 	}
 
-	if draw_step_btn(minus_rect, "-", theme, sc) {
+	if draw_step_btn(minus_rect, "-", theme, sc, allow_input) {
 		scale^ = clamp(scale^ / QUIVER_SCALE_STEP, QUIVER_SCALE_MIN, QUIVER_SCALE_MAX)
 	}
-	if draw_step_btn(plus_rect, "+", theme, sc) {
+	if draw_step_btn(plus_rect, "+", theme, sc, allow_input) {
 		scale^ = clamp(scale^ * QUIVER_SCALE_STEP, QUIVER_SCALE_MIN, QUIVER_SCALE_MAX)
 	}
 	draw_fill_rounded(label_rect, theme.bg, 4 * sc)

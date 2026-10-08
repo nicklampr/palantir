@@ -395,5 +395,5 @@ plot_save_button :: proc(
 		text_col,
 	)
 
-	return hover && rl.IsMouseButtonReleased(.LEFT) && !app.palette.open
+	return hover && rl.IsMouseButtonReleased(.LEFT) && !app.results.dock_resize_input && !app.palette.open
 }

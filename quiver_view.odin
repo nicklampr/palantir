@@ -134,7 +134,7 @@ draw_quiver_view :: proc(
 	// the axis-direction arrows.
 	minp, maxp, bounds_ok := quiver3d_fit_bounds(arrows, f64(s))
 
-	active := !app.palette.open && !results_any_dropdown_open(&app.results)
+	active := !app.palette.open && !rs.dock_resize_input && !results_any_dropdown_open(rs)
 	mesh_view_update(mv, rect, active)
 
 	cam := rl.Camera3D {
@@ -230,6 +230,6 @@ draw_quiver_view :: proc(
 	hint := strings.clone_to_cstring("WASD move · right-drag look · wheel speed", context.temp_allocator)
 	draw_text(hint, c.int(rect.x + 8 * sc), c.int(rect.y + 22 * sc), i32(11 * sc), theme.muted)
 	if !app.exporting {
-		quiver_scale_stepper(rect, scale, theme, sc)
+		quiver_scale_stepper(rect, scale, theme, sc, !rs.dock_resize_input)
 	}
 }

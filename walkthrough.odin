@@ -15,6 +15,7 @@ WALKTHROUGH_ROWS := [?]Walkthrough_Row {
 	{"Use the folder path, Up button, or file browser to find CSV/JSON results.", false},
 	{"Click a file to plot it; Ctrl+click selects multiple files.", false},
 	{"Recents opens folders you've used before. Refresh reloads changed files.", false},
+	{"Drag the dividers beside the file dock and above the table to resize them.", false},
 
 	{"2. Navigate with the keyboard", true},
 	{"Ctrl+Shift+P  Open the command palette (including this walkthrough).", false},
