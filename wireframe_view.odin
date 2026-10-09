@@ -124,7 +124,6 @@ draw_wireframe_view :: proc(
 	if draw_button(reset, "Reset view", theme, sc, !rs.dock_resize_input) {
 		view_reset_default(mv, minp, maxp)
 	}
-	mesh_view_roll_buttons(mv, reset, theme, sc, !rs.dock_resize_input)
 	title_c := strings.clone_to_cstring(title, context.temp_allocator)
 	draw_text(title_c, i32(rect.x + 8 * sc), i32(rect.y + 4 * sc), i32(11 * sc), theme.muted)
 	hint := strings.clone_to_cstring("WASD move · right-drag look · wheel speed", context.temp_allocator)

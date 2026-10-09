@@ -968,22 +968,15 @@ test_mesh_refresh_preserves_field_selections :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_camera_roll_defaults_and_buttons :: proc(t: ^testing.T) {
+test_camera_roll_defaults :: proc(t: ^testing.T) {
 	mv := mesh_view_init()
 	testing.expect(t, mv.roll == 0, "new 3D cameras have zero roll (level horizon)")
 	up := cam_up(&mv)
 	testing.expect(t, up == rl.Vector3{0, 0, 1}, "zero roll up vector is plain world-up")
 
-	// Each roll button click rotates by one step.
-	mv.roll = 0
-	mv.roll += mesh_view_roll_step
-	testing.expect(t, abs(f64(mv.roll) - f64(mesh_view_roll_step)) < 1e-9, "roll button step applies")
-	mv.roll -= 2 * mesh_view_roll_step
-	testing.expect(t, abs(f64(mv.roll) + f64(mesh_view_roll_step)) < 1e-9, "roll button step is reversible")
-
 	// A rolled camera's up vector rotates around the view direction, not the
 	// world axes, so the horizon follows the view.
-	mv.roll = mesh_view_roll_step
+	mv.roll = f32(15 * math.PI / 180)
 	up = cam_up(&mv)
 	testing.expect(t, up.z > 0.9, "a small roll keeps the up vector mostly vertical")
 	testing.expect(t, abs(v3_len(up) - 1) < 1e-5, "rolled up vector stays unit length")

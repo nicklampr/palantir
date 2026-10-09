@@ -291,24 +291,6 @@ view_reset_default :: proc(mv: ^Mesh_View, minp, maxp: [3]f64) {
 	mv.speed = diag * 0.5
 }
 
-// Roll step per button click and the button pair, placed to the left of
-// `right_of` (the Reset view button). Each click rotates the camera's roll
-// one step; zero roll keeps the horizon level.
-mesh_view_roll_step :: f32(15 * math.PI / 180)
-
-mesh_view_roll_buttons :: proc(mv: ^Mesh_View, right_of: rl.Rectangle, theme: Theme, sc: f32, allow_input: bool) {
-	w := 34 * sc
-	gap := 6 * sc
-	roll_left := rl.Rectangle{right_of.x - w - gap, right_of.y, w, right_of.height}
-	roll_right := rl.Rectangle{roll_left.x - w - gap, roll_left.y, w, right_of.height}
-	if draw_button(roll_left, "\f{25C0}", theme, sc, allow_input) {
-		mv.roll -= mesh_view_roll_step
-	}
-	if draw_button(roll_right, "\f{25B6}", theme, sc, allow_input) {
-		mv.roll += mesh_view_roll_step
-	}
-}
-
 // Ground grid on the horizontal (XY) plane for the Z-up convention. raylib's
 // DrawGrid lays its grid on the XZ plane, so the model matrix is rotated 90°
 // about X to bring it down onto the XY plane.
@@ -568,7 +550,6 @@ draw_mesh_view :: proc(
 	if draw_button(reset, "Reset view", theme, sc, !app.results.dock_resize_input) && bounds_ok {
 		view_reset_default(mv, minp, maxp)
 	}
-	mesh_view_roll_buttons(mv, reset, theme, sc, !app.results.dock_resize_input)
 	hint := strings.clone_to_cstring("WASD move · right-drag look · wheel speed", context.temp_allocator)
 	draw_text(hint, c.int(rect.x + 8 * sc), c.int(rect.y + 8 * sc), i32(11 * sc), theme.muted)
 }
