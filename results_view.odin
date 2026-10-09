@@ -35,16 +35,10 @@ PLOT_WIREFRAME3D :: 9
 PLOT_CONTOUR :: 10
 
 Plot_Zoom_State :: struct {
-	initialized: bool,
-	preserve_on_base_change: bool,
-	base_x_min,
-	base_x_max,
-	base_y_min,
-	base_y_max: f64,
-	x_min,
-	x_max,
-	y_min,
-	y_max: f64,
+	initialized:                                    bool,
+	preserve_on_base_change:                        bool,
+	base_x_min, base_x_max, base_y_min, base_y_max: f64,
+	x_min, x_max, y_min, y_max:                     f64,
 }
 
 File_Entry :: struct {
@@ -90,8 +84,8 @@ Results_Plot :: struct {
 	plot_open:                                                                                    bool,
 	prev_id:                                                                                      int, // plot id of the previous frame (for one-shot camera fits)
 	bins:                                                                                         int, // histogram bin count (0 = auto)
-	contour_levels:                                                                              int,
-	contour_levels_edit:                                                                         bool,
+	contour_levels:                                                                               int,
+	contour_levels_edit:                                                                          bool,
 }
 
 // The nine column-selection slots, keyed by name rather than index. This is
@@ -112,72 +106,70 @@ Dock_Resize :: enum {
 }
 
 Results_State :: struct {
-	root:              string,
-	entries:           []File_Entry,
-	dir_scroll:        Scroll_State,
-	file_scroll:       Scroll_State,
-	path_buf:          [512]u8,
-	path_len:          int,
-	path_edit:         bool,
-	selected:          [dynamic]int,
-	file_cursor:       int, // keyboard cursor into the file list (0 = ".." row when present)
-	datasets:          [dynamic]^Dataset,
-	active_ds:         int,
-	raw_scroll:        Scroll_State,
-	raw_col_scroll:    f32,
+	root:                                              string,
+	entries:                                           []File_Entry,
+	dir_scroll:                                        Scroll_State,
+	file_scroll:                                       Scroll_State,
+	path_buf:                                          [512]u8,
+	path_len:                                          int,
+	path_edit:                                         bool,
+	selected:                                          [dynamic]int,
+	file_cursor:                                       int, // keyboard cursor into the file list (0 = ".." row when present)
+	datasets:                                          [dynamic]^Dataset,
+	active_ds:                                         int,
+	raw_scroll:                                        Scroll_State,
+	raw_col_scroll:                                    f32,
 	// Horizontal raw-table scrollbar drag state.
-	raw_col_dragging:  bool,
-	raw_col_grab_off:  f32,
-	raw_widths:        [dynamic]f32,
+	raw_col_dragging:                                  bool,
+	raw_col_grab_off:                                  f32,
+	raw_widths:                                        [dynamic]f32,
 	// Shared filter box for the column dropdowns (only one popup ever open).
-	col_filter:        [64]u8,
-	col_filter_len:    int,
+	col_filter:                                        [64]u8,
+	col_filter_len:                                    int,
 	// Command-palette folder navigation: parent + subdirectories of `root`,
 	// rebuilt whenever the folder is rescanned. Owns the name/path strings.
-	folder_cmds:       [dynamic]Palette_Command,
-	show_left_panel:     bool,
-	show_bottom_panel:   bool,
-	left_panel_width:    f32, // UI units, independent of zoom
-	bottom_panel_height: f32, // 0 keeps the automatic default height
-	dock_resize:         Dock_Resize,
-	dock_drag_mouse:     f32,
-	dock_drag_size:      f32,
-	dock_resize_input:   bool, // drag or release owns this frame's mouse input
-	show_recents:        bool,
-	search_buf:        [256]u8,
-	search_len:        int,
-	search_edit:       bool,
+	folder_cmds:                                       [dynamic]Palette_Command,
+	show_left_panel:                                   bool,
+	show_bottom_panel:                                 bool,
+	left_panel_width:                                  f32, // UI units, independent of zoom
+	bottom_panel_height:                               f32, // 0 keeps the automatic default height
+	dock_resize:                                       Dock_Resize,
+	dock_drag_mouse:                                   f32,
+	dock_drag_size:                                    f32,
+	dock_resize_input:                                 bool, // drag or release owns this frame's mouse input
+	show_recents:                                      bool,
+	search_buf:                                        [256]u8,
+	search_len:                                        int,
+	search_edit:                                       bool,
 	// True for the frame a text input consumed Enter, so the file-browser
 	// keyboard navigation can't also act on that same keypress.
-	text_enter:        bool,
-	plot:              Results_Plot,
-	plot_zoom:         [PLOT_CONTOUR + 1]Plot_Zoom_State,
-	map_view:          Map_View,
-	map_bg:            Map_Background,
-	map_bg_attempted: bool,
-	msg:               string,
+	text_enter:                                        bool,
+	plot:                                              Results_Plot,
+	plot_zoom:                                         [PLOT_CONTOUR + 1]Plot_Zoom_State,
+	map_view:                                          Map_View,
+	map_bg:                                            Map_Background,
+	map_bg_attempted:                                  bool,
+	msg:                                               string,
 	// 3D mesh viewer state (see mesh.odin / mesh_view.odin).
-	mesh:              ^Mesh_Dataset,
-	mesh_path:         string, // path the cached mesh was loaded from
-	mesh_view:         Mesh_View,
-	mesh_render:       Mesh_Render_Cache,
-	mesh_shader:       rl.Shader,
+	mesh:                                              ^Mesh_Dataset,
+	mesh_path:                                         string, // path the cached mesh was loaded from
+	mesh_view:                                         Mesh_View,
+	mesh_render:                                       Mesh_Render_Cache,
+	mesh_shader:                                       rl.Shader,
 	// 3D quiver fly camera / offscreen target (same Mesh_View machinery).
-	quiver_view:       Mesh_View,
+	quiver_view:                                       Mesh_View,
 	// 3D wireframe fly camera / offscreen target.
-	wireframe_view:    Mesh_View,
-	wireframe_src:     ^Dataset,
-	wireframe_x_col,
-	wireframe_y_col,
-	wireframe_z_col:   int,
+	wireframe_view:                                    Mesh_View,
+	wireframe_src:                                     ^Dataset,
+	wireframe_x_col, wireframe_y_col, wireframe_z_col: int,
 	// Arrow-size multiplier for the 2D / 3D quiver widgets (see quiver.odin).
-	quiver_scale:      f32,
+	quiver_scale:                                      f32,
 	// Remembered column names (persisted in settings); applied to the plot
 	// indices whenever a new dataset becomes active.
-	remembered:        Plot_Columns,
-	applied_to_ds:     rawptr, // dataset the remembered names were last applied to
+	remembered:                                        Plot_Columns,
+	applied_to_ds:                                     rawptr, // dataset the remembered names were last applied to
 	// Next frame time (rl.GetTime) at which to poll file mtimes for changes.
-	auto_refresh_next: f64,
+	auto_refresh_next:                                 f64,
 }
 
 // --- state lifecycle ---------------------------------------------------------
@@ -187,16 +179,16 @@ results_init :: proc(app: ^App) {
 	rs.active_ds = -1
 	rs.file_cursor = 0
 	rs.plot = Results_Plot {
-		id      = PLOT_SCATTER,
-		x_col   = -1,
-		y_col   = -1,
-		z_col   = -1,
-		h_col   = -1,
-		u_col   = -1,
-		v_col   = -1,
-		w_col   = -1,
-		lat_col = -1,
-		lon_col = -1,
+		id             = PLOT_SCATTER,
+		x_col          = -1,
+		y_col          = -1,
+		z_col          = -1,
+		h_col          = -1,
+		u_col          = -1,
+		v_col          = -1,
+		w_col          = -1,
+		lat_col        = -1,
+		lon_col        = -1,
 		contour_levels = CONTOUR_LEVEL_COUNT,
 	}
 	rs.map_view = Map_View {
@@ -926,7 +918,7 @@ results_focus_search :: proc(app: ^App) {
 
 // How often (seconds) the app polls loaded files for mtime changes. Cheap
 // stat() calls; only files that actually changed get re-read and re-parsed.
-AUTO_REFRESH_INTERVAL :: 5.0
+AUTO_REFRESH_INTERVAL :: 2.0
 
 // Reloads only the loaded datasets whose source file changed on disk (mtime
 // differs from when it was loaded, or the file vanished). Datasets whose file
@@ -991,7 +983,13 @@ results_refresh_changed :: proc(app: ^App) -> bool {
 			// Preserve the current 2D viewport through the next data-bounds
 			// update. Other plot types keep their own view state separately.
 			switch rs.plot.id {
-			case PLOT_LINE, PLOT_SCATTER, PLOT_HIST, PLOT_HIST2D, PLOT_QUIVER, PLOT_POLAR, PLOT_CONTOUR:
+			case PLOT_LINE,
+			     PLOT_SCATTER,
+			     PLOT_HIST,
+			     PLOT_HIST2D,
+			     PLOT_QUIVER,
+			     PLOT_POLAR,
+			     PLOT_CONTOUR:
 				rs.plot_zoom[rs.plot.id].preserve_on_base_change = true
 			case:
 			}
@@ -1146,7 +1144,11 @@ active_dataset :: proc(rs: ^Results_State) -> ^Dataset {
 
 // Keep both the file dock and the plot usable, including after shrinking the
 // window or changing UI zoom. The stored sizes remain in zoom-independent units.
-results_dock_limits :: proc(sw, sh, body_top, sc: f32) -> (left_min, left_max, bottom_min, bottom_max: f32) {
+results_dock_limits :: proc(
+	sw, sh, body_top, sc: f32,
+) -> (
+	left_min, left_max, bottom_min, bottom_max: f32,
+) {
 	width := max(sw - 30 * sc, 0) // margins and the gap between panels
 	left_min = min(180 * sc, width * 0.5)
 	left_max = max(left_min, width - min(320 * sc, width * 0.5))
@@ -1157,27 +1159,49 @@ results_dock_limits :: proc(sw, sh, body_top, sc: f32) -> (left_min, left_max, b
 	return
 }
 
-results_dock_sizes :: proc(rs: ^Results_State, sw, sh, body_top, sc: f32) -> (left_w, bottom_h: f32) {
+results_dock_sizes :: proc(
+	rs: ^Results_State,
+	sw, sh, body_top, sc: f32,
+) -> (
+	left_w, bottom_h: f32,
+) {
 	left_min, left_max, bottom_min, bottom_max := results_dock_limits(sw, sh, body_top, sc)
 	left_w = clamp(rs.left_panel_width * sc, left_min, left_max)
-	requested_h := rs.bottom_panel_height * sc if rs.bottom_panel_height > 0 else clamp(sh * 0.14, 160 * sc, 220 * sc)
+	requested_h :=
+		rs.bottom_panel_height * sc if rs.bottom_panel_height > 0 else clamp(sh * 0.14, 160 * sc, 220 * sc)
 	bottom_h = clamp(requested_h, bottom_min, bottom_max)
 	return
 }
 
 // The gaps between docks are drag handles. Consume the release before any
 // buttons or file rows can interpret it as a click; persist only on release.
-results_dock_resize_update :: proc(app: ^App, sw, sh, body_top, sc: f32) -> (left_hover, bottom_hover: bool) {
+results_dock_resize_update :: proc(
+	app: ^App,
+	sw, sh, body_top, sc: f32,
+) -> (
+	left_hover, bottom_hover: bool,
+) {
 	rs := &app.results
 	pad := 10 * sc
 	left_w, bottom_h := results_dock_sizes(rs, sw, sh, body_top, sc)
 	body_bottom := sh - pad - bottom_h if rs.show_bottom_panel else sh - pad
 	mouse := rl.GetMousePosition()
-	left_grip := rl.Rectangle{pad + left_w + pad * 0.5 - 5 * sc, body_top, 10 * sc, max(body_bottom - body_top, 0)}
-	bottom_grip := rl.Rectangle{pad, body_bottom + pad * 0.5 - 5 * sc, max(sw - 2 * pad, 0), 10 * sc}
+	left_grip := rl.Rectangle {
+		pad + left_w + pad * 0.5 - 5 * sc,
+		body_top,
+		10 * sc,
+		max(body_bottom - body_top, 0),
+	}
+	bottom_grip := rl.Rectangle {
+		pad,
+		body_bottom + pad * 0.5 - 5 * sc,
+		max(sw - 2 * pad, 0),
+		10 * sc,
+	}
 	can_start := !app.palette.open && !results_any_dropdown_open(rs)
 	left_hover = can_start && rs.show_left_panel && rl.CheckCollisionPointRec(mouse, left_grip)
-	bottom_hover = can_start && rs.show_bottom_panel && rl.CheckCollisionPointRec(mouse, bottom_grip)
+	bottom_hover =
+		can_start && rs.show_bottom_panel && rl.CheckCollisionPointRec(mouse, bottom_grip)
 
 	if rs.dock_resize == .None && can_start && rl.IsMouseButtonPressed(.LEFT) {
 		if left_hover {
@@ -1195,9 +1219,12 @@ results_dock_resize_update :: proc(app: ^App, sw, sh, body_top, sc: f32) -> (lef
 		left_min, left_max, bottom_min, bottom_max := results_dock_limits(sw, sh, body_top, sc)
 		switch rs.dock_resize {
 		case .Left:
-			rs.left_panel_width = clamp(rs.dock_drag_size + mouse.x - rs.dock_drag_mouse, left_min, left_max) / sc
+			rs.left_panel_width =
+				clamp(rs.dock_drag_size + mouse.x - rs.dock_drag_mouse, left_min, left_max) / sc
 		case .Bottom:
-			rs.bottom_panel_height = clamp(rs.dock_drag_size + rs.dock_drag_mouse - mouse.y, bottom_min, bottom_max) / sc
+			rs.bottom_panel_height =
+				clamp(rs.dock_drag_size + rs.dock_drag_mouse - mouse.y, bottom_min, bottom_max) /
+				sc
 		case .None:
 		}
 		if !rl.IsMouseButtonDown(.LEFT) || !can_start {
@@ -1292,7 +1319,13 @@ draw_results_view :: proc(app: ^App) {
 	if draw_button(recents_rect, "Recents", t, sc, !rs.dock_resize_input) {
 		rs.show_recents = true
 	}
-	if draw_button(left_toggle_rect, "Left On" if rs.show_left_panel else "Left Off", t, sc, !rs.dock_resize_input) {
+	if draw_button(
+		left_toggle_rect,
+		"Left On" if rs.show_left_panel else "Left Off",
+		t,
+		sc,
+		!rs.dock_resize_input,
+	) {
 		results_toggle_left_panel(app)
 	}
 	if draw_button(
@@ -1362,7 +1395,10 @@ draw_results_view :: proc(app: ^App) {
 	if rs.show_left_panel {
 		x := left.x + left.width + pad * 0.5
 		color := t.accent if left_hover || rs.dock_resize == .Left else t.border
-		rl.DrawRectangleRec({x - sc, body_top + 8 * sc, 2 * sc, max(body_bottom - body_top - 16 * sc, 0)}, color)
+		rl.DrawRectangleRec(
+			{x - sc, body_top + 8 * sc, 2 * sc, max(body_bottom - body_top - 16 * sc, 0)},
+			color,
+		)
 	}
 	if rs.show_bottom_panel {
 		y := body_bottom + pad * 0.5
@@ -1817,7 +1853,11 @@ draw_plot_selector :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32)
 		if popup.y + popup.height > f32(rl.GetScreenHeight()) - margin {
 			popup.y = rect.y - popup.height
 		}
-		popup.y = clamp(popup.y, margin, max(margin, f32(rl.GetScreenHeight()) - popup.height - margin))
+		popup.y = clamp(
+			popup.y,
+			margin,
+			max(margin, f32(rl.GetScreenHeight()) - popup.height - margin),
+		)
 		draw_fill_rounded(popup, popup_bg, radius)
 		draw_stroke_rounded(popup, theme.border, radius, 1)
 
@@ -1872,7 +1912,10 @@ draw_plot_selector :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32)
 				rs.plot.plot_open = false
 			}
 		}
-	} else if header_hover && !rs.dock_resize_input && rl.IsMouseButtonReleased(.LEFT) && !app.palette.open {
+	} else if header_hover &&
+	   !rs.dock_resize_input &&
+	   rl.IsMouseButtonReleased(.LEFT) &&
+	   !app.palette.open {
 		results_close_column_popups(rs)
 		rs.plot.plot_open = true
 	}
@@ -2154,7 +2197,12 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 						ds_column(ds, z_name).floats,
 					)
 					if len(grid.x) < 2 || len(grid.y) < 2 {
-						draw_empty_plot(plot_rect, "X, Y and Z must describe a rectangular grid", t, sc)
+						draw_empty_plot(
+							plot_rect,
+							"X, Y and Z must describe a rectangular grid",
+							t,
+							sc,
+						)
 					} else {
 						if rs.plot.prev_id != PLOT_WIREFRAME3D ||
 						   rs.wireframe_src != ds ||
@@ -2167,14 +2215,7 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 						rs.wireframe_x_col = rs.plot.x_col
 						rs.wireframe_y_col = rs.plot.y_col
 						rs.wireframe_z_col = rs.plot.z_col
-						draw_wireframe_view(
-							app,
-							grid,
-							"3D wireframe",
-							plot_rect,
-							t,
-							sc,
-						)
+						draw_wireframe_view(app, grid, "3D wireframe", plot_rect, t, sc)
 					}
 				}
 			}
@@ -2493,7 +2534,13 @@ draw_plot_config :: proc(app: ^App, rect: rl.Rectangle) {
 			{"X", "Y", "U", "V", "Color"},
 			{&rs.plot.x_col, &rs.plot.y_col, &rs.plot.u_col, &rs.plot.v_col, &rs.plot.h_col},
 			{&rs.plot.x_open, &rs.plot.y_open, &rs.plot.u_open, &rs.plot.v_open, &rs.plot.h_open},
-			{&rs.plot.x_scroll, &rs.plot.y_scroll, &rs.plot.u_scroll, &rs.plot.v_scroll, &rs.plot.h_scroll},
+			{
+				&rs.plot.x_scroll,
+				&rs.plot.y_scroll,
+				&rs.plot.u_scroll,
+				&rs.plot.v_scroll,
+				&rs.plot.h_scroll,
+			},
 			names,
 			t,
 			sc,
@@ -2527,7 +2574,12 @@ draw_plot_config :: proc(app: ^App, rect: rl.Rectangle) {
 			t,
 			sc,
 		)
-		levels_rect := rl.Rectangle{rect.x + columns_rect.width + gap, rect.y, levels_w, rect.height}
+		levels_rect := rl.Rectangle {
+			rect.x + columns_rect.width + gap,
+			rect.y,
+			levels_w,
+			rect.height,
+		}
 		draw_contour_levels_spinner(app, levels_rect, t, sc)
 	case PLOT_QUIVER3D:
 		// Positions on the first row, vector components on the second.
@@ -3327,7 +3379,13 @@ format_cell :: proc(col: ^Column, row: int) -> string {
 
 // --- small widgets -----------------------------------------------------------
 
-draw_button :: proc(rect: rl.Rectangle, label: cstring, theme: Theme, sc: f32, allow_input := true) -> bool {
+draw_button :: proc(
+	rect: rl.Rectangle,
+	label: cstring,
+	theme: Theme,
+	sc: f32,
+	allow_input := true,
+) -> bool {
 	mouse := rl.GetMousePosition()
 	hover := rl.CheckCollisionPointRec(mouse, rect)
 	pressed := hover && rl.IsMouseButtonDown(.LEFT)
