@@ -668,17 +668,26 @@ plot_zoom_update :: proc(
 ) -> (
 	x_min, x_max, y_min, y_max: f64,
 ) {
-	if !state.initialized ||
-	   !same_value(state.base_x_min, base_x_min) ||
-	   !same_value(state.base_x_max, base_x_max) ||
-	   !same_value(state.base_y_min, base_y_min) ||
-	   !same_value(state.base_y_max, base_y_max) {
+	if !state.initialized {
 		state.initialized = true
 		state.base_x_min, state.base_x_max = base_x_min, base_x_max
 		state.base_y_min, state.base_y_max = base_y_min, base_y_max
 		state.x_min, state.x_max = base_x_min, base_x_max
 		state.y_min, state.y_max = base_y_min, base_y_max
+	} else if !same_value(state.base_x_min, base_x_min) ||
+	          !same_value(state.base_x_max, base_x_max) ||
+	          !same_value(state.base_y_min, base_y_min) ||
+	          !same_value(state.base_y_max, base_y_max) {
+		state.base_x_min, state.base_x_max = base_x_min, base_x_max
+		state.base_y_min, state.base_y_max = base_y_min, base_y_max
+		if !state.preserve_on_base_change {
+			state.x_min, state.x_max = base_x_min, base_x_max
+			state.y_min, state.y_max = base_y_min, base_y_max
+		}
 	}
+	// The preservation is one-shot: later axis changes return to the normal
+	// fit-to-data behavior.
+	state.preserve_on_base_change = false
 
 	if reset {
 		state.x_min, state.x_max = base_x_min, base_x_max

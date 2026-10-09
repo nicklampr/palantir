@@ -2,6 +2,7 @@ package palantir
 
 import "core:encoding/json"
 import "core:fmt"
+import "core:math"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -164,7 +165,14 @@ test_plot_zoom_update :: proc(t: ^testing.T) {
 	testing.expect(t, x_min == 0 && x_max == 10 && y_min == 0 && y_max == 20, "reset restores the full data bounds")
 
 	_, _, _, _ = plot_zoom_update(&state, 1, 11, 0, 20, 0.5, 0.5, 0, false)
-	testing.expect(t, state.x_min == 1 && state.x_max == 11, "changed data bounds reset the viewport")
+	testing.expect(t, state.x_min == 1 && state.x_max == 11, "changed data bounds reset the viewport normally")
+
+	state.preserve_on_base_change = true
+	_, _, _, _ = plot_zoom_update(&state, 2, 12, 0, 20, 0.5, 0.5, 0, false)
+	testing.expect(t, state.x_min == 1 && state.x_max == 11, "refresh preservation keeps the viewport across changed bounds")
+	testing.expect(t, !state.preserve_on_base_change, "viewport preservation is one-shot")
+	_, _, _, _ = plot_zoom_update(&state, 3, 13, 0, 20, 0.5, 0.5, 0, false)
+	testing.expect(t, state.x_min == 3 && state.x_max == 13, "later data-bound changes return to normal fitting")
 
 	_, _, _, _ = plot_zoom_update(&state, 0, 10, 0, 20, 0.5, 0.5, 1, false, true)
 	testing.expect(t, abs((state.x_min+state.x_max)*0.5-5) < 1e-9, "centered zoom retains the plot origin")
@@ -815,7 +823,7 @@ test_refresh_changed_reloads_modified :: proc(t: ^testing.T) {
 	tmp := fmt_tmp_path("refresh")
 	defer os.remove(tmp)
 
-	err := os.write_entire_file_from_string(tmp, `{"x":[1.0,2.0],"y":[10.0,20.0]}`)
+	err := os.write_entire_file_from_string(tmp, `{"h":[1.0,2.0],"lat":[1.0,2.0],"lon":[3.0,4.0],"u":[5.0,6.0],"v":[7.0,8.0],"w":[9.0,10.0],"x":[1.0,2.0],"y":[10.0,20.0],"z":[2.0,3.0]}`)
 	testing.expect(t, err == nil, "failed to write tmp json")
 	if err != nil {return}
 
@@ -824,26 +832,168 @@ test_refresh_changed_reloads_modified :: proc(t: ^testing.T) {
 	if !ok {return}
 	append(&app.results.datasets, ds)
 	app.results.active_ds = 0
+	// Live picks across every column slot have not been saved to remembered
+	// names yet. Refresh must capture and resolve them all, regardless of plot.
+	rs := &app.results
+	rs.plot.x_col = results_col_index(ds, "x")
+	rs.plot.y_col = results_col_index(ds, "y")
+	rs.plot.z_col = results_col_index(ds, "z")
+	rs.plot.h_col = results_col_index(ds, "h")
+	rs.plot.u_col = results_col_index(ds, "u")
+	rs.plot.v_col = results_col_index(ds, "v")
+	rs.plot.w_col = results_col_index(ds, "w")
+	rs.plot.lat_col = results_col_index(ds, "lat")
+	rs.plot.lon_col = results_col_index(ds, "lon")
 	before := rawptr(ds)
 
 	// Unchanged file: no reload, dataset kept in place.
 	testing.expect(t, !results_refresh_changed(app), "no reload when the file is unchanged")
 	testing.expect(t, len(app.results.datasets) == 1 && rawptr(app.results.datasets[0]) == before, "unchanged dataset kept")
+	_, _, _, _ = plot_zoom_update(&rs.plot_zoom[PLOT_SCATTER], 0, 10, 0, 10, 0.5, 0.5, 1, false)
+	zoom_x_min := rs.plot_zoom[PLOT_SCATTER].x_min
+	zoom_x_max := rs.plot_zoom[PLOT_SCATTER].x_max
+	zoom_y_min := rs.plot_zoom[PLOT_SCATTER].y_min
+	zoom_y_max := rs.plot_zoom[PLOT_SCATTER].y_max
 
 	// Modify the file and give the mtime a chance to advance.
 	time.sleep(20 * time.Millisecond)
-	werr := os.write_entire_file_from_string(tmp, `{"x":[3.0,4.0],"y":[30.0,40.0]}`)
+	werr := os.write_entire_file_from_string(tmp, `{"a":[99.0,99.0],"h":[1.0,2.0],"lat":[1.0,2.0],"lon":[3.0,4.0],"u":[5.0,6.0],"v":[7.0,8.0],"w":[9.0,10.0],"x":[3.0,4.0],"y":[30.0,40.0],"z":[2.0,3.0]}`)
 	testing.expect(t, werr == nil, "failed to rewrite tmp json")
 	if werr != nil {return}
 
 	testing.expect(t, results_refresh_changed(app), "reload triggered on mtime change")
 	testing.expect(t, len(app.results.datasets) == 1 && rawptr(app.results.datasets[0]) != before, "dataset replaced after change")
 	if len(app.results.datasets) == 0 {return}
-	xc := ds_column(app.results.datasets[0], "x")
+	refreshed := app.results.datasets[0]
+	testing.expect(t, rs.plot_zoom[PLOT_SCATTER].preserve_on_base_change, "refresh marks the active plot viewport for preservation")
+	_, _, _, _ = plot_zoom_update(&rs.plot_zoom[PLOT_SCATTER], -5, 15, -10, 30, 0.5, 0.5, 0, false)
+	testing.expect(t, rs.plot_zoom[PLOT_SCATTER].x_min == zoom_x_min && rs.plot_zoom[PLOT_SCATTER].x_max == zoom_x_max, "plot zoom survives changed data bounds")
+	testing.expect(t, rs.plot_zoom[PLOT_SCATTER].y_min == zoom_y_min && rs.plot_zoom[PLOT_SCATTER].y_max == zoom_y_max, "plot vertical zoom survives changed data bounds")
+	testing.expect(t, rs.plot.x_col == results_col_index(refreshed, "x"), "X selection survives refresh and column reorder")
+	testing.expect(t, rs.plot.y_col == results_col_index(refreshed, "y"), "Y selection survives refresh and column reorder")
+	testing.expect(t, rs.plot.z_col == results_col_index(refreshed, "z"), "Z selection survives refresh and column reorder")
+	testing.expect(t, rs.plot.h_col == results_col_index(refreshed, "h"), "color/histogram selection survives refresh")
+	testing.expect(t, rs.plot.u_col == results_col_index(refreshed, "u"), "U selection survives refresh")
+	testing.expect(t, rs.plot.v_col == results_col_index(refreshed, "v"), "V selection survives refresh")
+	testing.expect(t, rs.plot.w_col == results_col_index(refreshed, "w"), "W selection survives refresh")
+	testing.expect(t, rs.plot.lat_col == results_col_index(refreshed, "lat"), "latitude selection survives refresh")
+	testing.expect(t, rs.plot.lon_col == results_col_index(refreshed, "lon"), "longitude selection survives refresh")
+	testing.expect(t, rs.remembered.x == "x" && rs.remembered.y == "y" && rs.remembered.z == "z", "coordinate selections are remembered by name")
+	testing.expect(t, rs.remembered.h == "h" && rs.remembered.u == "u" && rs.remembered.v == "v" && rs.remembered.w == "w", "color and vector selections are remembered by name")
+	testing.expect(t, rs.remembered.lat == "lat" && rs.remembered.lon == "lon", "map selections are remembered by name")
+	xc := ds_column(refreshed, "x")
 	testing.expect(t, xc != nil && len(xc.floats) == 2 && xc.floats[0] == 3.0, "reloaded dataset has new contents")
+
+	// An active 3D wireframe keeps its fly-camera pose while its source pointer
+	// and selected-column indices are updated for the replacement dataset.
+	rs.plot.id = PLOT_WIREFRAME3D
+	rs.plot.prev_id = PLOT_WIREFRAME3D
+	rs.wireframe_src = refreshed
+	rs.wireframe_x_col = rs.plot.x_col
+	rs.wireframe_y_col = rs.plot.y_col
+	rs.wireframe_z_col = rs.plot.z_col
+	rs.wireframe_view.fit = false
+	rs.wireframe_view.pos = rl.Vector3{21, 22, 23}
+	rs.wireframe_view.yaw = 1.25
+	rs.wireframe_view.pitch = -0.4
+	time.sleep(20 * time.Millisecond)
+	werr = os.write_entire_file_from_string(tmp, `{"0":[0.0,0.0],"a":[99.0,99.0],"h":[1.0,2.0],"lat":[1.0,2.0],"lon":[3.0,4.0],"u":[5.0,6.0],"v":[7.0,8.0],"w":[9.0,10.0],"x":[5.0,6.0],"y":[50.0,60.0],"z":[2.0,3.0]}`)
+	testing.expect(t, werr == nil, "failed to rewrite wireframe fixture")
+	if werr != nil {return}
+	testing.expect(t, results_refresh_changed(app), "second refresh reloads the active wireframe source")
+	refreshed = active_dataset(rs)
+	testing.expect(t, rs.wireframe_view.preserve_camera_once, "wireframe refresh marks its camera to be preserved")
+	testing.expect(t, !mesh_view_needs_fit(&rs.wireframe_view), "wireframe refresh suppresses the pending fit")
+	testing.expect(t, !rs.wireframe_view.fit, "wireframe refresh does not schedule a camera refit")
+	testing.expect(t, rs.wireframe_view.pos.x == 21 && rs.wireframe_view.pos.y == 22 && rs.wireframe_view.pos.z == 23, "wireframe camera position survives refresh")
+	testing.expect(t, rs.wireframe_view.yaw == 1.25 && rs.wireframe_view.pitch == -0.4, "wireframe camera orientation survives refresh")
+	testing.expect(t, rs.wireframe_src == refreshed && rs.wireframe_x_col == rs.plot.x_col && rs.wireframe_y_col == rs.plot.y_col && rs.wireframe_z_col == rs.plot.z_col, "wireframe cache keys follow the reloaded dataset")
 
 	// No further change: stays put again.
 	testing.expect(t, !results_refresh_changed(app), "no reload when unchanged after reload")
+}
+
+@(test)
+test_mesh_refresh_preserves_field_selections :: proc(t: ^testing.T) {
+	tmp := fmt_tmp_path("mesh_refresh")
+	defer os.remove(tmp)
+	initial := `{"label":["a","b","c"],"x":[0.0,1.0,0.0],"y":[0.0,0.0,1.0],"z":[0.0,0.0,0.0],"vmag":[1.0,2.0,3.0],"triangles":[[0,1,2]]}`
+	write_err := os.write_entire_file_from_string(tmp, initial)
+	testing.expect(t, write_err == nil, "failed to write initial mesh fixture")
+	if write_err != nil {return}
+
+	app: App
+	results_init(&app)
+	defer results_destroy(&app)
+	ds, ds_ok := load_dataset(tmp)
+	mesh, mesh_ok := load_mesh_dataset(tmp, "mesh")
+	testing.expect(t, ds_ok && mesh_ok, "load mesh fixture as dataset and mesh")
+	if !ds_ok || !mesh_ok {return}
+	append(&app.results.datasets, ds)
+	app.results.active_ds = 0
+	app.results.mesh = mesh
+	app.results.mesh_path = strings.clone(tmp)
+	app.results.plot.id = PLOT_MESH3D
+	app.results.plot.x_col = mesh_field_index(mesh, "x")
+	app.results.plot.y_col = mesh_field_index(mesh, "y")
+	app.results.plot.z_col = mesh_field_index(mesh, "z")
+	app.results.plot.h_col = mesh_field_index(mesh, "vmag")
+	app.results.mesh_view.fit = false
+	app.results.mesh_view.pos = rl.Vector3{31, 32, 33}
+	app.results.mesh_view.yaw = 0.75
+	app.results.mesh_view.pitch = -0.2
+
+	time.sleep(20 * time.Millisecond)
+	changed := `{"a":[4.0,5.0,6.0],"label":["a","b","c"],"x":[0.0,1.0,0.0],"y":[0.0,0.0,1.0],"z":[0.0,0.0,0.0],"vmag":[1.0,2.0,3.0],"triangles":[[0,1,2]]}`
+	write_err = os.write_entire_file_from_string(tmp, changed)
+	testing.expect(t, write_err == nil, "failed to rewrite mesh fixture")
+	if write_err != nil {return}
+
+	testing.expect(t, results_refresh_changed(&app), "mesh refresh triggered on file change")
+	testing.expect(t, app.results.remembered.x == "x" && app.results.remembered.y == "y", "mesh coordinate fields remembered by name")
+	testing.expect(t, app.results.remembered.z == "z" && app.results.remembered.h == "vmag", "mesh Z/color fields remembered by name")
+	refreshed_mesh := results_ensure_mesh(&app, active_dataset(&app.results))
+	testing.expect(t, refreshed_mesh != nil, "reloaded mesh available")
+	if refreshed_mesh != nil {
+		testing.expect(t, app.results.mesh_view.preserve_camera_once, "mesh refresh marks its camera to be preserved")
+		testing.expect(t, !mesh_view_needs_fit(&app.results.mesh_view), "mesh refresh suppresses the pending fit")
+		testing.expect(t, !app.results.mesh_view.fit, "mesh refresh does not schedule a camera refit")
+		testing.expect(t, app.results.mesh_view.pos.x == 31 && app.results.mesh_view.pos.y == 32 && app.results.mesh_view.pos.z == 33, "mesh camera position survives refresh")
+		testing.expect(t, app.results.mesh_view.yaw == 0.75 && app.results.mesh_view.pitch == -0.2, "mesh camera orientation survives refresh")
+		testing.expect(t, app.results.plot.x_col == mesh_field_index(refreshed_mesh, "x"), "mesh X selection survives reordered fields")
+		testing.expect(t, app.results.plot.y_col == mesh_field_index(refreshed_mesh, "y"), "mesh Y selection survives reordered fields")
+		testing.expect(t, app.results.plot.z_col == mesh_field_index(refreshed_mesh, "z"), "mesh Z selection survives reordered fields")
+		testing.expect(t, app.results.plot.h_col == mesh_field_index(refreshed_mesh, "vmag"), "mesh color selection survives reordered fields")
+	}
+}
+
+@(test)
+test_camera_roll_defaults_and_buttons :: proc(t: ^testing.T) {
+	mv := mesh_view_init()
+	testing.expect(t, mv.roll == 0, "new 3D cameras have zero roll (level horizon)")
+	up := cam_up(&mv)
+	testing.expect(t, up == rl.Vector3{0, 0, 1}, "zero roll up vector is plain world-up")
+
+	// Each roll button click rotates by one step.
+	mv.roll = 0
+	mv.roll += mesh_view_roll_step
+	testing.expect(t, abs(f64(mv.roll) - f64(mesh_view_roll_step)) < 1e-9, "roll button step applies")
+	mv.roll -= 2 * mesh_view_roll_step
+	testing.expect(t, abs(f64(mv.roll) + f64(mesh_view_roll_step)) < 1e-9, "roll button step is reversible")
+
+	// A rolled camera's up vector rotates around the view direction, not the
+	// world axes, so the horizon follows the view.
+	mv.roll = mesh_view_roll_step
+	up = cam_up(&mv)
+	testing.expect(t, up.z > 0.9, "a small roll keeps the up vector mostly vertical")
+	testing.expect(t, abs(v3_len(up) - 1) < 1e-5, "rolled up vector stays unit length")
+
+	// Both reset paths restore the zero-roll default.
+	view_reset_default(&mv, [3]f64{-1, -1, -1}, [3]f64{1, 1, 1})
+	testing.expect(t, mv.roll == 0, "reset view clears roll")
+	mv.roll = 1.0
+	view_fit_bounds(&mv, [3]f64{-1, -1, -1}, [3]f64{1, 1, 1})
+	testing.expect(t, mv.roll == 0, "camera fit clears roll")
 }
 
 @(test)

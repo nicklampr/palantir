@@ -36,6 +36,7 @@ PLOT_CONTOUR :: 10
 
 Plot_Zoom_State :: struct {
 	initialized: bool,
+	preserve_on_base_change: bool,
 	base_x_min,
 	base_x_max,
 	base_y_min,
@@ -785,6 +786,25 @@ remember_slot :: proc(slot: ^string, name: string) {
 results_sync_remembered :: proc(app: ^App) {
 	rs := &app.results
 	ds := active_dataset(rs)
+	if rs.plot.id == PLOT_MESH3D {
+		// Mesh fields have their own selection namespace. Only sync them from the
+		// mesh currently belonging to the active dataset; never interpret those
+		// indices as ordinary dataset columns.
+		if ds == nil || rs.mesh == nil || rs.mesh.path != ds.path {
+			return
+		}
+		mesh_slot_name :: proc(m: ^Mesh_Dataset, idx: int) -> string {
+			if m == nil || idx < 0 || idx >= len(m.fields) {
+				return ""
+			}
+			return m.fields[idx].name
+		}
+		remember_slot(&rs.remembered.x, mesh_slot_name(rs.mesh, rs.plot.x_col))
+		remember_slot(&rs.remembered.y, mesh_slot_name(rs.mesh, rs.plot.y_col))
+		remember_slot(&rs.remembered.z, mesh_slot_name(rs.mesh, rs.plot.z_col))
+		remember_slot(&rs.remembered.h, mesh_slot_name(rs.mesh, rs.plot.h_col))
+		return
+	}
 	slot_name :: proc(ds: ^Dataset, idx: int) -> string {
 		if ds == nil || idx < 0 || idx >= len(ds.columns) {
 			return ""
@@ -919,6 +939,12 @@ results_refresh_changed :: proc(app: ^App) -> bool {
 	if len(rs.datasets) == 0 {
 		return false
 	}
+	// Capture the live selections before replacing any dataset. They may have
+	// changed since the last settings save, and the remembered names are what
+	// let the replacement dataset resolve those selections again.
+	results_sync_remembered(app)
+	active_before := active_dataset(rs)
+	active_reloaded := false
 	changed := false
 	mesh_dirty := false
 	kept := 0
@@ -946,6 +972,9 @@ results_refresh_changed :: proc(app: ^App) -> bool {
 			rs.datasets[kept] = nds
 			kept += 1
 			changed = true
+			if ds == active_before {
+				active_reloaded = true
+			}
 		}
 		delete(path)
 	}
@@ -955,11 +984,33 @@ results_refresh_changed :: proc(app: ^App) -> bool {
 		results_destroy_mesh(app)
 	}
 	if changed {
-		rs.wireframe_src = nil
-		rs.wireframe_view.fit = true
-		// The reloaded dataset has fresh columns; re-resolve remembered names.
-		if ds := active_dataset(rs); ds != nil && rawptr(ds) != rs.applied_to_ds {
+		// Re-resolve even if the allocator reused the old Dataset address.
+		if active_reloaded && active_dataset(rs) != nil {
 			results_apply_remembered(app)
+
+			// Preserve the current 2D viewport through the next data-bounds
+			// update. Other plot types keep their own view state separately.
+			switch rs.plot.id {
+			case PLOT_LINE, PLOT_SCATTER, PLOT_HIST, PLOT_HIST2D, PLOT_QUIVER, PLOT_POLAR, PLOT_CONTOUR:
+				rs.plot_zoom[rs.plot.id].preserve_on_base_change = true
+			case:
+			}
+
+			// Preserve the active 3D camera through any fit that the renderer
+			// would otherwise request for the replacement data.
+			switch rs.plot.id {
+			case PLOT_MESH3D:
+				rs.mesh_view.preserve_camera_once = true
+			case PLOT_QUIVER3D:
+				rs.quiver_view.preserve_camera_once = true
+			case PLOT_WIREFRAME3D:
+				rs.wireframe_view.preserve_camera_once = true
+				rs.wireframe_src = active_dataset(rs)
+				rs.wireframe_x_col = rs.plot.x_col
+				rs.wireframe_y_col = rs.plot.y_col
+				rs.wireframe_z_col = rs.plot.z_col
+			case:
+			}
 		}
 		results_compute_raw_widths(app)
 	}
@@ -1287,6 +1338,16 @@ draw_results_view :: proc(app: ^App) {
 		} else {
 			draw_file_browser(app, left)
 		}
+		// Credit pinned to the bottom of the left dock, over its background.
+		credit := "created by N. Lamprinidis"
+		credit_c := strings.clone_to_cstring(credit, context.temp_allocator)
+		draw_text(
+			credit_c,
+			c.int(left.x + 10 * sc),
+			c.int(left.y + left.height - 16 * sc),
+			i32(11 * sc),
+			t.muted,
+		)
 	}
 
 	// --- right panel: plot ---------------------------------------------------

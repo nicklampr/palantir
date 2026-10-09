@@ -123,11 +123,10 @@ draw_quiver_view :: proc(
 		s = 1
 	}
 
-	if mv.fit {
+	if mesh_view_needs_fit(mv) {
 		if minp, maxp, ok := quiver3d_fit_bounds(arrows, f64(s)); ok {
 			view_fit_bounds(mv, minp, maxp)
 		}
-		mv.fit = false
 	}
 
 	// Bounds of the drawn (scale-scaled) field, reused for the camera fit and
@@ -140,7 +139,7 @@ draw_quiver_view :: proc(
 	cam := rl.Camera3D {
 		position   = mv.pos,
 		target     = v3_add(mv.pos, cam_forward(mv.yaw, mv.pitch)),
-		up         = {0, 0, 1},
+		up         = cam_up(mv),
 		fovy       = 45,
 		projection = .PERSPECTIVE,
 	}
@@ -224,7 +223,13 @@ draw_quiver_view :: proc(
 		draw_3d_axis_labels(cam, axis_origin, axis_len, mv.rt.texture.width, mv.rt.texture.height, rect, sc)
 	}
 
-	// Overlay: title, control hint, and the arrow-size multiplier stepper.
+	// Overlay: title, control hint, reset view, and the arrow-size stepper.
+	reset_w := 84 * sc
+	reset := rl.Rectangle{rect.x + rect.width - reset_w - 8 * sc, rect.y + 6 * sc, reset_w, 24 * sc}
+	if draw_button(reset, "Reset view", theme, sc, !rs.dock_resize_input) && bounds_ok {
+		view_reset_default(mv, minp, maxp)
+	}
+	mesh_view_roll_buttons(mv, reset, theme, sc, !rs.dock_resize_input)
 	title_c := strings.clone_to_cstring(title, context.temp_allocator)
 	draw_text(title_c, i32(rect.x + 8 * sc), i32(rect.y + 4 * sc), i32(11 * sc), theme.muted)
 	hint := strings.clone_to_cstring("WASD move · right-drag look · wheel speed", context.temp_allocator)

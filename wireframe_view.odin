@@ -76,9 +76,8 @@ draw_wireframe_view :: proc(
 		draw_text("No finite Z values", c.int(rect.x + 14 * sc), c.int(rect.y + 14 * sc), i32(13 * sc), theme.muted)
 		return
 	}
-	if mv.fit {
+	if mesh_view_needs_fit(mv) {
 		view_fit_bounds(mv, minp, maxp)
-		mv.fit = false
 	}
 	active := !app.palette.open && !rs.dock_resize_input && !results_any_dropdown_open(rs)
 	mesh_view_update(mv, rect, active)
@@ -86,7 +85,7 @@ draw_wireframe_view :: proc(
 	cam := rl.Camera3D {
 		position   = mv.pos,
 		target     = v3_add(mv.pos, cam_forward(mv.yaw, mv.pitch)),
-		up         = {0, 0, 1},
+		up         = cam_up(mv),
 		fovy       = 45,
 		projection = .PERSPECTIVE,
 	}
@@ -110,7 +109,6 @@ draw_wireframe_view :: proc(
 	rl.BeginTextureMode(mv.rt)
 	rl.ClearBackground(theme.window_bg)
 	rl.BeginMode3D(cam)
-	draw_ground_grid(20, 1.0)
 	draw_3d_axis_arrows(axis_origin, axis_len)
 	wireframe_draw_grid(grid, theme.accent)
 	rl.EndMode3D()
@@ -120,6 +118,13 @@ draw_wireframe_view :: proc(
 	rl.DrawTexturePro(mv.rt.texture, src, rect, rl.Vector2{0, 0}, 0, rl.WHITE)
 	draw_3d_axis_labels(cam, axis_origin, axis_len, mv.rt.texture.width, mv.rt.texture.height, rect, sc)
 
+	// Overlay: title, reset view, and control hint.
+	reset_w := 84 * sc
+	reset := rl.Rectangle{rect.x + rect.width - reset_w - 8 * sc, rect.y + 6 * sc, reset_w, 24 * sc}
+	if draw_button(reset, "Reset view", theme, sc, !rs.dock_resize_input) {
+		view_reset_default(mv, minp, maxp)
+	}
+	mesh_view_roll_buttons(mv, reset, theme, sc, !rs.dock_resize_input)
 	title_c := strings.clone_to_cstring(title, context.temp_allocator)
 	draw_text(title_c, i32(rect.x + 8 * sc), i32(rect.y + 4 * sc), i32(11 * sc), theme.muted)
 	hint := strings.clone_to_cstring("WASD move · right-drag look · wheel speed", context.temp_allocator)
