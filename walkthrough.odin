@@ -33,6 +33,7 @@ WALKTHROUGH_ROWS := [?]Walkthrough_Row {
 
 	{"4. Explore plots", true},
 	{"Pick a plot type and choose its data columns above the graph.", false},
+	{"Toggle axis equal in the palette for matching X/Y units on 2D plots.", false},
 	{"Hover data for details. On zoomable 2D plots: wheel zooms, middle-click resets.", false},
 	{"On the map: drag to pan, Ctrl+wheel to zoom.", false},
 	{"Use Save PNG on a plot to export its image to the working directory.", false},

@@ -42,6 +42,32 @@ test_walkthrough_palette_command :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_axis_equal_palette_command :: proc(t: ^testing.T) {
+	sync.mutex_lock(&global_app_test_mutex)
+	defer sync.mutex_unlock(&global_app_test_mutex)
+	default_app = {}
+	defer default_app = {}
+	app := &default_app
+	palette_init(&app.palette, gui_commands[:], on_palette_select)
+	defer palette_destroy(&app.palette)
+
+	found := false
+	for cmd, i in gui_commands {
+		if GuiCommand(uintptr(cmd.user_data)) == .toggle_axis_equal {
+			palette_open_it(&app.palette)
+			palette_activate(&app.palette, i)
+			testing.expect(t, app.results.plot.axis_equal && !app.palette.open, "palette enables axis equal")
+			palette_open_it(&app.palette)
+			palette_activate(&app.palette, i)
+			testing.expect(t, !app.results.plot.axis_equal, "palette disables axis equal")
+			found = true
+			break
+		}
+	}
+	testing.expect(t, found, "axis equal is in the command palette")
+}
+
+@(test)
 test_panel_visibility_settings :: proc(t: ^testing.T) {
 	defaults := default_settings()
 	testing.expect(t, !defaults.left_panel_hidden && !defaults.bottom_panel_hidden, "panels are visible with older settings")
@@ -98,6 +124,7 @@ test_default_plot_selection :: proc(t: ^testing.T) {
 
 	saved_settings := default_settings()
 	saved_settings.plot_id = PLOT_HIST
+	saved_settings.axis_equal = true
 	data, marshal_err := json.marshal(saved_settings)
 	testing.expect(t, marshal_err == nil, "could not serialize saved plot choice")
 	if marshal_err == nil {
@@ -106,8 +133,8 @@ test_default_plot_selection :: proc(t: ^testing.T) {
 		unmarshal_err := json.unmarshal(data, &restored_settings)
 		testing.expect(
 			t,
-			unmarshal_err == nil && restored_settings.plot_id == PLOT_HIST,
-			"saved plot choice should override the fresh default",
+			unmarshal_err == nil && restored_settings.plot_id == PLOT_HIST && restored_settings.axis_equal,
+			"saved plot choice and equal-axis preference should survive settings roundtrip",
 		)
 	}
 
@@ -116,6 +143,26 @@ test_default_plot_selection :: proc(t: ^testing.T) {
 	defer results_destroy(&app)
 	testing.expect(t, app.results.plot.id == PLOT_SCATTER, "new results state should default to a 2D scatter plot")
 	testing.expect(t, app.results.plot.contour_levels == CONTOUR_LEVEL_COUNT, "contour plot defaults to seven levels")
+}
+
+@(test)
+test_plot_equal_bounds :: proc(t: ^testing.T) {
+	area := rl.Rectangle{0, 0, 400, 200}
+	x0, x1, y0, y1 := plot_equal_bounds(-2, 2, -2, 2, area)
+	testing.expect(t, x0 == -4 && x1 == 4 && y0 == -2 && y1 == 2, "wide area expands X without cropping Y")
+	testing.expect(t, (x1 - x0) / f64(area.width) == (y1 - y0) / f64(area.height), "one unit occupies equal pixels")
+
+	area = rl.Rectangle{0, 0, 200, 400}
+	x0, x1, y0, y1 = plot_equal_bounds(-2, 2, -2, 2, area)
+	testing.expect(t, x0 == -2 && x1 == 2 && y0 == -4 && y1 == 4, "tall area expands Y without cropping X")
+	x0, x1, y0, y1 = plot_equal_bounds(1, 3, 5, 9, rl.Rectangle{0, 0, 400, 200})
+	testing.expect(t, x0 == -2 && x1 == 6 && y0 == 5 && y1 == 9, "expansion preserves center and covers the data")
+	testing.expect(t, plot_supports_axis_equal(PLOT_LINE) && plot_supports_axis_equal(PLOT_SCATTER) &&
+		plot_supports_axis_equal(PLOT_HIST2D) && plot_supports_axis_equal(PLOT_QUIVER) &&
+		plot_supports_axis_equal(PLOT_CONTOUR), "all Cartesian X/Y plots support equal axes")
+	testing.expect(t, !plot_supports_axis_equal(PLOT_HIST) && !plot_supports_axis_equal(PLOT_MAP) &&
+		!plot_supports_axis_equal(PLOT_POLAR) && !plot_supports_axis_equal(PLOT_MESH3D),
+		"count, projected, and already-equal plots are unchanged")
 }
 
 @(test)

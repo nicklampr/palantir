@@ -91,6 +91,7 @@ Results_Plot :: struct {
 	bins:                                                                                         int, // histogram bin count (0 = auto)
 	contour_levels:                                                                              int,
 	contour_levels_edit:                                                                         bool,
+	axis_equal:                                                                                  bool,
 }
 
 // The nine column-selection slots, keyed by name rather than index. This is
@@ -1687,6 +1688,13 @@ draw_recents_panel :: proc(app: ^App, panel: rl.Rectangle) {
 
 // --- plot panel --------------------------------------------------------------
 
+// Polar and 3D already use equal spatial units; a geographic map has its own
+// projection, and a 1D histogram's count axis is not comparable to its X axis.
+plot_supports_axis_equal :: proc(plot_id: int) -> bool {
+	return plot_id == PLOT_LINE || plot_id == PLOT_SCATTER || plot_id == PLOT_HIST2D ||
+	       plot_id == PLOT_QUIVER || plot_id == PLOT_CONTOUR
+}
+
 PLOT_NAMES := [?]string {
 	"Map",
 	"Line",
@@ -1727,6 +1735,9 @@ draw_plot_selector :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32)
 		font_size,
 		theme.text,
 	)
+	if rs.plot.axis_equal && plot_supports_axis_equal(rs.plot.id) {
+		draw_text("1:1 axes", c.int(rect.x + 10 * sc), c.int(rect.y + 10 * sc), i32(11 * sc), theme.accent)
+	}
 	arrow_x := rect.x + rect.width - 16 * sc
 	arrow_y := rect.y + rect.height * 0.5
 	rl.DrawLineEx(

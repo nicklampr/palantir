@@ -85,6 +85,7 @@ App_Settings :: struct {
 	bottom_panel_height: f32,
 	// Multiplier on the auto-detected UI scale; adjustable live with +/-/0.
 	ui_scale_zoom:  f32,
+	axis_equal:     bool, // equal X/Y units on applicable Cartesian plots
 	// Recently browsed folders (most recent first).
 	recent_folders: []string,
 	// Last active plot type + the last column selection per slot, remembered
@@ -192,6 +193,7 @@ save_settings :: proc(app: ^App) {
 			left_panel_width    = app.results.left_panel_width,
 			bottom_panel_height = app.results.bottom_panel_height,
 			ui_scale_zoom  = app.ui_scale_zoom,
+			axis_equal     = app.results.plot.axis_equal,
 			recent_folders = app.recents,
 			plot_id        = app.results.plot.id,
 			plot_x_col     = app.results.remembered.x,
@@ -234,6 +236,7 @@ GuiCommand :: enum {
 	open_recents,
 	find_files,
 	refresh_plots,
+	toggle_axis_equal,
 	show_walkthrough,
 	toggle_font,
 	toggle_left_panel,
@@ -297,6 +300,11 @@ gui_commands := [?]Palette_Command {
 		name = "Refresh plots",
 		description = "reload selected result files",
 		user_data = rawptr(uintptr(GuiCommand.refresh_plots)),
+	},
+	{
+		name = "Toggle axis equal",
+		description = "match X and Y data units on 2D Cartesian plots",
+		user_data = rawptr(uintptr(GuiCommand.toggle_axis_equal)),
 	},
 	{
 		name = "Toggle left panel",
@@ -403,6 +411,7 @@ app_init :: proc(app: ^App, config := App_Config{}) {
 	rs := &app.results
 	rs.show_left_panel = !settings.left_panel_hidden
 	rs.show_bottom_panel = !settings.bottom_panel_hidden
+	rs.plot.axis_equal = settings.axis_equal
 	if settings.left_panel_width > 0 {
 		rs.left_panel_width = settings.left_panel_width
 	}
@@ -587,6 +596,9 @@ on_palette_select :: proc(cmd: Palette_Command) {
 		default_app.walkthrough_scroll = 0
 	case .toggle_font:
 		_ = toggle_app_font()
+	case .toggle_axis_equal:
+		default_app.results.plot.axis_equal = !default_app.results.plot.axis_equal
+		save_settings(&default_app)
 	case .toggle_left_panel:
 		results_toggle_left_panel(&default_app)
 	case .toggle_bottom_panel:
@@ -720,6 +732,23 @@ plot_zoom_update :: proc(
 	return state.x_min, state.x_max, state.y_min, state.y_max
 }
 
+// Expand (never crop) the shorter visible span so a data unit occupies the
+// same number of screen pixels on both axes. Preserve the center on resize.
+plot_equal_bounds :: proc(
+	x_min, x_max, y_min, y_max: f64,
+	area: rl.Rectangle,
+) -> (equal_x_min, equal_x_max, equal_y_min, equal_y_max: f64) {
+	x_span, y_span := x_max - x_min, y_max - y_min
+	if area.width <= 0 || area.height <= 0 || x_span <= 0 || y_span <= 0 {
+		return x_min, x_max, y_min, y_max
+	}
+	unit_per_pixel := max(x_span / f64(area.width), y_span / f64(area.height))
+	x_half := unit_per_pixel * f64(area.width) * 0.5
+	y_half := unit_per_pixel * f64(area.height) * 0.5
+	x_center, y_center := (x_min + x_max) * 0.5, (y_min + y_max) * 0.5
+	return x_center - x_half, x_center + x_half, y_center - y_half, y_center + y_half
+}
+
 plot_zoom_bounds :: proc(
 	app: ^App,
 	plot_id: int,
@@ -748,8 +777,32 @@ plot_zoom_bounds :: proc(
 	}
 	fx := f64(mouse.x - plot_area.x) / f64(plot_area.width)
 	fy := 1 - f64(mouse.y - plot_area.y) / f64(plot_area.height)
+	state := &app.results.plot_zoom[plot_id]
+	if app.results.plot.axis_equal && plot_supports_axis_equal(plot_id) {
+		// Work from the stored zoom rather than expanding it on every frame:
+		// a dock/window resize must not permanently zoom the data out. Export
+		// has its own aspect ratio, so it must not change the interactive zoom.
+		view := state^
+		x_min, x_max, y_min, y_max := plot_zoom_update(
+			&view, base_x_min, base_x_max, base_y_min, base_y_max,
+			fx, fy, 0, reset, centered,
+		)
+		if wheel != 0 {
+			x_min, x_max, y_min, y_max = plot_equal_bounds(x_min, x_max, y_min, y_max, plot_area)
+			view.x_min, view.x_max = x_min, x_max
+			view.y_min, view.y_max = y_min, y_max
+			x_min, x_max, y_min, y_max = plot_zoom_update(
+				&view, base_x_min, base_x_max, base_y_min, base_y_max,
+				fx, fy, wheel, false, centered,
+			)
+		}
+		if !app.exporting {
+			state^ = view
+		}
+		return plot_equal_bounds(x_min, x_max, y_min, y_max, plot_area)
+	}
 	return plot_zoom_update(
-		&app.results.plot_zoom[plot_id],
+		state,
 		base_x_min,
 		base_x_max,
 		base_y_min,
