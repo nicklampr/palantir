@@ -11,7 +11,6 @@ import "core:c"
 import "core:math"
 import "core:strings"
 import rl "vendor:raylib"
-import rlgl "vendor:raylib/rlgl"
 
 // Unlit shader so the per-vertex scalar colors render at full brightness
 // (no lighting dimming, no light setup required). Attribute/uniform names match
@@ -295,10 +294,10 @@ view_reset_default :: proc(mv: ^Mesh_View, minp, maxp: [3]f64) {
 // DrawGrid lays its grid on the XZ plane, so the model matrix is rotated 90°
 // about X to bring it down onto the XY plane.
 draw_ground_grid :: proc(slices: c.int, spacing: f32) {
-	rlgl.PushMatrix()
-	rlgl.Rotatef(90, 1, 0, 0)
+	PushMatrix()
+	Rotatef(90, 1, 0, 0)
 	rl.DrawGrid(slices, spacing)
-	rlgl.PopMatrix()
+	PopMatrix()
 }
 
 // Frees the GPU mesh and the CPU buffers it references.
@@ -495,7 +494,7 @@ draw_mesh_view :: proc(
 	rl.ClearBackground(theme.window_bg)
 	rl.BeginMode3D(cam)
 
-	rlgl.DisableBackfaceCulling()
+	DisableBackfaceCulling()
 	draw_ground_grid(20, 1.0)
 	draw_3d_axis_arrows(axis_origin, axis_len)
 
@@ -506,9 +505,9 @@ draw_mesh_view :: proc(
 	mat.shader = rs.mesh_shader
 	if cache.mesh.vaoId != 0 {
 		if mv.wireframe {
-			rlgl.EnableWireMode()
+			EnableWireMode()
 			rl.DrawMesh(cache.mesh, mat, rl.Matrix(1))
-			rlgl.DisableWireMode()
+			DisableWireMode()
 		} else {
 			rl.DrawMesh(cache.mesh, mat, rl.Matrix(1))
 		}
@@ -521,7 +520,7 @@ draw_mesh_view :: proc(
 			rl.DrawSphere(rl.Vector3{f32(xv[i]), f32(yv[i]), f32(zv[i])}, 0.05, theme.axis_y)
 		}
 	}
-	rlgl.EnableBackfaceCulling()
+	EnableBackfaceCulling()
 
 	rl.EndMode3D()
 	rl.EndTextureMode()

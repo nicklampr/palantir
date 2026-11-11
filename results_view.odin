@@ -2384,7 +2384,9 @@ draw_dropdown_row :: proc(
 draw_contour_levels_spinner :: proc(app: ^App, rect: rl.Rectangle, theme: Theme, sc: f32) {
 	rs := &app.results
 	value := c.int(clamp(rs.plot.contour_levels, CONTOUR_LEVEL_MIN, CONTOUR_LEVEL_MAX))
-	controls := [?]rl.GuiControl{.SPINNER, .VALUEBOX, .BUTTON}
+	// raygui 5 removed SPINNER from GuiControl; GuiSpinner now uses the
+	// VALUEBOX and BUTTON styles directly.
+	controls := [?]rl.GuiControl{.VALUEBOX, .BUTTON}
 	props := [?]c.int {
 		c.int(rl.GuiControlProperty.BORDER_COLOR_NORMAL),
 		c.int(rl.GuiControlProperty.BASE_COLOR_NORMAL),

@@ -22,7 +22,6 @@ import "core:testing"
 import "core:thread"
 import "core:time"
 import rl "vendor:raylib"
-import rlgl "vendor:raylib/rlgl"
 
 MAP_ZOOM_MIN :: 1.0 // min lon span in degrees (max zoom-in)
 MAP_ZOOM_MAX :: 360.0 // max lon span (whole world)
@@ -331,7 +330,7 @@ destroy_map_background :: proc(bg: ^Map_Background) {
 	if bg.tex.id != 0 {
 		// Flush queued quads that may still reference this texture before
 		// releasing its GPU storage.
-		rlgl.DrawRenderBatchActive()
+		DrawRenderBatchActive()
 		rl.UnloadTexture(bg.tex)
 		bg.tex = rl.Texture2D{}
 	}
