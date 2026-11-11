@@ -164,18 +164,7 @@ plot_contour :: proc(
 	)
 	x_range, y_range := x_max - x_min, y_max - y_min
 
-	for i in 0 ..= 4 {
-		t := f64(i) / 4
-		gx, gy := x_min + t * x_range, y_min + t * y_range
-		sx := plot_area.x + f32(t) * plot_area.width
-		sy := plot_area.y + plot_area.height - f32(t) * plot_area.height
-		rl.DrawLine(i32(plot_area.x), i32(sy), i32(plot_area.x + plot_area.width), i32(sy), theme.grid)
-		rl.DrawLine(i32(sx), i32(plot_area.y), i32(sx), i32(plot_area.y + plot_area.height), theme.grid)
-		x_lbl := strings.clone_to_cstring(fmt.tprintf("%.3g", gx), context.temp_allocator)
-		y_lbl := strings.clone_to_cstring(fmt.tprintf("%.3g", gy), context.temp_allocator)
-		draw_text(x_lbl, i32(sx - 20 * sc), i32(plot_area.y + plot_area.height + 2 * sc), font_size - 2, theme.text)
-		draw_text(y_lbl, i32(plot_area.x - 60 * sc), i32(sy - 8 * sc), font_size - 2, theme.text)
-	}
+	draw_cartesian_grid_and_ticks(plot_area, x_min, y_min, x_range, y_range, theme, font_size, sc, "%.3g")
 	draw_plot_axis_labels(rect, plot_area, x_label, y_label, theme, font_size, sc)
 
 	segments := contour2d_segments(grid, levels)

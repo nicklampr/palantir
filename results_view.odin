@@ -711,8 +711,26 @@ results_sync_datasets :: proc(app: ^App) {
 
 	if len(rs.datasets) == 0 {
 		rs.active_ds = -1
-	} else if rs.active_ds < 0 || rs.active_ds >= len(rs.datasets) {
-		rs.active_ds = len(rs.datasets) - 1
+	} else {
+		// Make the most recently selected file the active dataset when it exists,
+		// so selecting a file always loads and focuses it in the plot/table.
+		active_set := false
+		if len(rs.selected) > 0 {
+			last_sel := rs.selected[len(rs.selected) - 1]
+			if last_sel >= 0 && last_sel < len(rs.entries) {
+				last_path := rs.entries[last_sel].path
+				for ds, i in rs.datasets {
+					if ds != nil && ds.path == last_path {
+						rs.active_ds = i
+						active_set = true
+						break
+					}
+				}
+			}
+		}
+		if !active_set && (rs.active_ds < 0 || rs.active_ds >= len(rs.datasets)) {
+			rs.active_ds = len(rs.datasets) - 1
+		}
 	}
 
 	// A newly active dataset gets its remembered column names re-resolved into
@@ -760,6 +778,61 @@ results_apply_remembered :: proc(app: ^App) {
 	rs.plot.lat_col = results_col_index(ds, rs.remembered.lat)
 	rs.plot.lon_col = results_col_index(ds, rs.remembered.lon)
 	rs.applied_to_ds = rawptr(ds)
+}
+
+// Resolves X and Y column names for the active dataset, falling back to
+// auto-detected columns when `plot.x_col` / `plot.y_col` are -1 (auto).
+results_xy_col_names :: proc(app: ^App) -> (x_name, y_name: string) {
+	rs := &app.results
+	ds := active_dataset(rs)
+	x_idx := rs.plot.x_col
+	y_idx := rs.plot.y_col
+	if ds != nil && len(ds.columns) > 0 {
+		if x_idx < 0 || x_idx >= len(ds.columns) {
+			x_idx = results_auto_x_col(ds)
+		}
+		if y_idx < 0 || y_idx >= len(ds.columns) {
+			y_idx = results_auto_y_col(ds, x_idx)
+		}
+	}
+	return results_col_name(app, x_idx), results_col_name(app, y_idx)
+}
+
+// Auto-detected X column index when `plot.x_col` is -1 (auto).
+results_auto_x_col :: proc(ds: ^Dataset) -> int {
+	if ds == nil || len(ds.columns) == 0 {
+		return -1
+	}
+	if idx := results_col_index(ds, "x"); idx >= 0 {
+		return idx
+	}
+	for &col, i in ds.columns {
+		if is_time_column(&col) {
+			return i
+		}
+	}
+	for &col, i in ds.columns {
+		if col.type == .Float || col.type == .Bool {
+			return i
+		}
+	}
+	return 0
+}
+
+// Auto-detected Y column index when `plot.y_col` is -1 (auto).
+results_auto_y_col :: proc(ds: ^Dataset, x_idx: int) -> int {
+	if ds == nil || len(ds.columns) == 0 {
+		return -1
+	}
+	if idx := results_col_index(ds, "y"); idx >= 0 && idx != x_idx {
+		return idx
+	}
+	for &col, i in ds.columns {
+		if i != x_idx && (col.type == .Float || col.type == .Bool) {
+			return i
+		}
+	}
+	return min(1, len(ds.columns) - 1)
 }
 
 // Stores `name` in a remembered slot, preserving the old value when `name` is
@@ -2014,8 +2087,7 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 			}
 
 		case PLOT_LINE, PLOT_SCATTER:
-			x_name := results_col_name(app, rs.plot.x_col)
-			y_name := results_col_name(app, rs.plot.y_col)
+			x_name, y_name := results_xy_col_names(app)
 			if x_name == "" || y_name == "" {
 				draw_empty_plot(plot_rect, "Pick x and y columns", t, sc)
 			} else {
@@ -2051,7 +2123,11 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 		case PLOT_HIST:
 			ds := active_dataset(rs)
 			if ds != nil {
-				h_name := results_col_name(app, rs.plot.h_col)
+				h_idx := rs.plot.h_col
+				if h_idx < 0 || h_idx >= len(ds.columns) {
+					h_idx = rs.plot.y_col if rs.plot.y_col >= 0 && rs.plot.y_col < len(ds.columns) else results_auto_x_col(ds)
+				}
+				h_name := results_col_name(app, h_idx)
 				if h_name == "" {
 					draw_empty_plot(plot_rect, "Pick a column", t, sc)
 				} else {
@@ -2076,8 +2152,7 @@ draw_plot_panel :: proc(app: ^App, panel: rl.Rectangle) {
 		case PLOT_HIST2D:
 			ds := active_dataset(rs)
 			if ds != nil {
-				x_name := results_col_name(app, rs.plot.x_col)
-				y_name := results_col_name(app, rs.plot.y_col)
+				x_name, y_name := results_xy_col_names(app)
 				if x_name == "" || y_name == "" {
 					draw_empty_plot(plot_rect, "Pick x and y columns", t, sc)
 				} else {
@@ -3179,51 +3254,12 @@ draw_raw_table :: proc(app: ^App, rect: rl.Rectangle) {
 	}
 	rs.raw_scroll.content = f32(ds.n_rows) * row_h
 	max_offset := max(rs.raw_scroll.content - viewport.height, 0)
-	rs.raw_scroll.offset = clamp(rs.raw_scroll.offset, 0, max_offset)
 	mouse := rl.GetMousePosition()
 	if !app.palette.open {
 		shift := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
-		if rl.CheckCollisionPointRec(mouse, viewport) && !shift {
-			rs.raw_scroll.offset = clamp(
-				rs.raw_scroll.offset - rl.GetMouseWheelMove() * WHEEL_STEP * sc,
-				0,
-				max_offset,
-			)
-		}
-		if max_offset > 0 {
-			track := scroll_track(viewport, sc)
-			thumb, _ := scroll_thumb_of(
-				rs.raw_scroll,
-				track,
-				viewport.height,
-				SCROLLBAR_MIN_THUMB * sc,
-			)
-			if rl.IsMouseButtonPressed(.LEFT) {
-				if rl.CheckCollisionPointRec(mouse, thumb) {
-					rs.raw_scroll.dragging = true
-					rs.raw_scroll.grab_off = mouse.y - thumb.y
-				} else if rl.CheckCollisionPointRec(mouse, track) {
-					rs.raw_scroll.dragging = true
-					rs.raw_scroll.grab_off = thumb.height * 0.5
-					rs.raw_scroll.offset =
-						(mouse.y - thumb.height * 0.5 - track.y) /
-						max(track.height - thumb.height, 1) *
-						max_offset
-				}
-			}
-			if rs.raw_scroll.dragging && rl.IsMouseButtonDown(.LEFT) {
-				rs.raw_scroll.offset =
-					(mouse.y - rs.raw_scroll.grab_off - track.y) /
-					max(track.height - thumb.height, 1) *
-					max_offset
-			}
-			if rl.IsMouseButtonReleased(.LEFT) {
-				rs.raw_scroll.dragging = false
-			}
-			rs.raw_scroll.offset = clamp(rs.raw_scroll.offset, 0, max_offset)
-		} else {
-			rs.raw_scroll.dragging = false
-		}
+		ui_scroll_update(&rs.raw_scroll, viewport, sc, !shift)
+	} else {
+		rs.raw_scroll.offset = clamp(rs.raw_scroll.offset, 0, max_offset)
 	}
 
 	// --- rows (clipped below the header) ------------------------------------

@@ -103,6 +103,28 @@ mesh_view_unload :: proc(mv: ^Mesh_View) {
 	}
 }
 
+// Ensures the offscreen 3D render texture matches `rect` at the current DPI.
+mesh_view_ensure_rt :: proc(mv: ^Mesh_View, rect: rl.Rectangle) {
+	dpi := rl.GetWindowScaleDPI()
+	px := max(dpi.x, dpi.y, 1.0)
+	w := c.int(max(rect.width * px, 1))
+	h := c.int(max(rect.height * px, 1))
+	if mv.rt.id == 0 || mv.rt_w != w || mv.rt_h != h {
+		if mv.rt.id != 0 {
+			rl.UnloadRenderTexture(mv.rt)
+		}
+		mv.rt = rl.LoadRenderTexture(w, h)
+		mv.rt_w = w
+		mv.rt_h = h
+	}
+}
+
+// Blits the vertically-flipped 3D render texture into `rect`.
+mesh_view_blit_rt :: proc(mv: ^Mesh_View, rect: rl.Rectangle) {
+	src := rl.Rectangle{0, 0, f32(mv.rt.texture.width), -f32(mv.rt.texture.height)}
+	rl.DrawTexturePro(mv.rt.texture, src, rect, rl.Vector2{0, 0}, 0, rl.WHITE)
+}
+
 v3_add :: proc(a, b: rl.Vector3) -> rl.Vector3 {return {a.x + b.x, a.y + b.y, a.z + b.z}}
 v3_sub :: proc(a, b: rl.Vector3) -> rl.Vector3 {return {a.x - b.x, a.y - b.y, a.z - b.z}}
 v3_scale :: proc(a: rl.Vector3, s: f32) -> rl.Vector3 {return {a.x * s, a.y * s, a.z * s}}
@@ -477,18 +499,7 @@ draw_mesh_view :: proc(
 	// Render the 3D scene into an offscreen target sized to the plot rect, then
 	// blit it. This keeps the 3D viewport consistent (raylib derives the camera
 	// aspect from the current framebuffer, which is the render texture here).
-	dpi := rl.GetWindowScaleDPI()
-	px := max(dpi.x, dpi.y, 1.0)
-	w := c.int(max(rect.width * px, 1))
-	h := c.int(max(rect.height * px, 1))
-	if mv.rt.id == 0 || mv.rt_w != w || mv.rt_h != h {
-		if mv.rt.id != 0 {
-			rl.UnloadRenderTexture(mv.rt)
-		}
-		mv.rt = rl.LoadRenderTexture(w, h)
-		mv.rt_w = w
-		mv.rt_h = h
-	}
+	mesh_view_ensure_rt(mv, rect)
 
 	rl.BeginTextureMode(mv.rt)
 	rl.ClearBackground(theme.window_bg)
@@ -526,8 +537,7 @@ draw_mesh_view :: proc(
 	rl.EndTextureMode()
 
 	// Blit the (vertically flipped) render texture into the plot rect.
-	src := rl.Rectangle{0, 0, f32(mv.rt.texture.width), -f32(mv.rt.texture.height)}
-	rl.DrawTexturePro(mv.rt.texture, src, rect, rl.Vector2{0, 0}, 0, rl.WHITE)
+	mesh_view_blit_rt(mv, rect)
 
 	// Axis labels over the blitted scene.
 	if bounds_ok {

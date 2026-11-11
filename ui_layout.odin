@@ -113,18 +113,13 @@ scroll_thumb_of :: proc(
 	return rl.Rectangle{track.x, thumb_y, track.width, thumb_h}, true
 }
 
-// Begins a vertically scrollable region. `viewport` is the region to draw in
-// and is also used as the scissor rect. Handles the wheel (when `wheel` is
-// true) and scrollbar drag, clamped using the content height measured by the
-// previous `ui_scroll_end`. Returns a Ui cursor already scrolled into place,
-// with the content width (leaving room for the scrollbar). Pair with
-// `ui_scroll_end`, which draws the scrollbar.
-ui_scroll_begin :: proc(
+// Updates vertical scrollbar + wheel state for `viewport`.
+ui_scroll_update :: proc(
 	s: ^Scroll_State,
 	viewport: rl.Rectangle,
 	sc: f32,
 	wheel: bool = true,
-) -> Ui {
+) {
 	max_offset := max(s.content - viewport.height, 0)
 	s.offset = clamp(s.offset, 0, max_offset)
 
@@ -162,7 +157,21 @@ ui_scroll_begin :: proc(
 		}
 		s.offset = clamp(s.offset, 0, max_offset)
 	}
+}
 
+// Begins a vertically scrollable region. `viewport` is the region to draw in
+// and is also used as the scissor rect. Handles the wheel (when `wheel` is
+// true) and scrollbar drag, clamped using the content height measured by the
+// previous `ui_scroll_end`. Returns a Ui cursor already scrolled into place,
+// with the content width (leaving room for the scrollbar). Pair with
+// `ui_scroll_end`, which draws the scrollbar.
+ui_scroll_begin :: proc(
+	s: ^Scroll_State,
+	viewport: rl.Rectangle,
+	sc: f32,
+	wheel: bool = true,
+) -> Ui {
+	ui_scroll_update(s, viewport, sc, wheel)
 	pad := SCROLLBAR_PAD * sc
 	gutter := SCROLLBAR_GUTTER * sc
 	return Ui {

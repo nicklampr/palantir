@@ -182,12 +182,10 @@ save_settings :: proc(app: ^App) {
 		}
 		// Refresh the remembered column names from the live selections.
 		results_sync_remembered(app)
-		dpi := rl.GetWindowScaleDPI()
-		scl := max(dpi.x, dpi.y, 1)
 		s := App_Settings {
 			theme_index    = app.theme_index,
-			window_width   = i32(math.round(f32(rl.GetScreenWidth()) / scl)),
-			window_height  = i32(math.round(f32(rl.GetScreenHeight()) / scl)),
+			window_width   = rl.GetScreenWidth(),
+			window_height  = rl.GetScreenHeight(),
 			left_panel_hidden   = !app.results.show_left_panel,
 			bottom_panel_hidden = !app.results.show_bottom_panel,
 			left_panel_width    = app.results.left_panel_width,
@@ -374,7 +372,7 @@ app_run_with_options :: proc(app: ^App, config: App_Config, options: CLI_Options
 app_init :: proc(app: ^App, config := App_Config{}) {
 	cfg := config if config.title != nil else default_config()
 	settings := load_settings()
-	if settings.window_width > 0 && settings.window_height > 0 {
+	if settings.window_width >= 640 && settings.window_height >= 400 {
 		cfg.width = settings.window_width
 		cfg.height = settings.window_height
 	}
@@ -387,12 +385,15 @@ app_init :: proc(app: ^App, config := App_Config{}) {
 
 	rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT, .WINDOW_HIGHDPI})
 	rl.InitWindow(cfg.width, cfg.height, cfg.title)
+	dpi := rl.GetWindowScaleDPI()
+	dpi_scale := max(dpi.x, dpi.y, 1)
 	mon := rl.GetCurrentMonitor()
-	max_w := rl.GetMonitorWidth(mon)
-	max_h := rl.GetMonitorHeight(mon)
+	max_w := max(i32(f32(rl.GetMonitorWidth(mon)) / dpi_scale), 640)
+	max_h := max(i32(f32(rl.GetMonitorHeight(mon)) / dpi_scale), 400)
 	if cfg.width > max_w || cfg.height > max_h {
 		rl.SetWindowSize(min(cfg.width, max_w), min(cfg.height, max_h))
 	}
+	sync_window_input_scale()
 	rl.SetTargetFPS(cfg.target_fps)
 	rl.SetExitKey(.KEY_NULL) // Esc closes the palette, not the app.
 	load_app_font()
@@ -475,6 +476,7 @@ app_should_run :: proc(app: ^App) -> bool {
 }
 
 app_update :: proc(app: ^App) {
+	sync_window_input_scale()
 	if app.recents_dirty {
 		refresh_palette_recents(app)
 		app.recents_dirty = false
@@ -507,10 +509,42 @@ app_update :: proc(app: ^App) {
 	free_all(context.temp_allocator)
 }
 
-// Best-effort UI scale for the current display: the max of the OS-reported
-// content scale, a resolution heuristic (1080p -> 1.0, 4K -> 2.0), and a
-// physical-DPI estimate. Never below 1.0.
+// Keep mouse coordinates in the same logical screen-space (0..GetScreenWidth,
+// 0..GetScreenHeight) that the UI draws in. On GLFW Wayland with HighDPI,
+// raylib's FramebufferSizeCallback divides mouse coordinates by DPI even though
+// GLFW cursor events are already in logical window coordinates, halving click
+// positions on 2x displays.
+sync_window_input_scale :: proc() {
+	when ODIN_OS != .JS {
+		if !rl.IsWindowReady() {
+			return
+		}
+		sw := rl.GetScreenWidth()
+		sh := rl.GetScreenHeight()
+		rw := rl.GetRenderWidth()
+		rh := rl.GetRenderHeight()
+		if sw > 0 && sh > 0 && (rw > sw || rh > sh) {
+			rl.SetMouseScale(1, 1)
+		}
+	}
+}
+
+// Best-effort UI scale for the current display. When raylib's HighDPI mode is
+// active (render size > logical screen size), raylib already scales logical
+// coordinates by the window DPI scale, so the logical screen is already at 1x
+// UI density (~1920x1080 on a 4K 2x display). Only apply the monitor-resolution
+// / physical-DPI heuristics when the window is unscaled (render == screen).
 detect_base_ui_scale :: proc() -> f32 {
+	if rl.IsWindowReady() {
+		sw := rl.GetScreenWidth()
+		sh := rl.GetScreenHeight()
+		rw := rl.GetRenderWidth()
+		rh := rl.GetRenderHeight()
+		if sw > 0 && sh > 0 && (rw > sw || rh > sh) {
+			return 1
+		}
+	}
+
 	scale := f32(1)
 
 	dpi := rl.GetWindowScaleDPI()
@@ -834,6 +868,50 @@ draw_plot_zoom_hint :: proc(rect: rl.Rectangle, theme: Theme, sc: f32) {
 	)
 }
 
+// Draws the 4x4 Cartesian grid + tick labels inside `plot_area`.
+draw_cartesian_grid_and_ticks :: proc(
+	plot_area: rl.Rectangle,
+	x_min, y_min, x_range, y_range: f64,
+	theme: Theme,
+	font_size: i32,
+	sc: f32,
+	fmt_spec: string = "%.2f",
+) {
+	for i := 0; i <= 4; i += 1 {
+		t := f64(i) / 4.0
+		gx := x_min + t * x_range
+		gy := y_min + t * y_range
+		sx := plot_area.x + f32(t) * plot_area.width
+		sy := plot_area.y + plot_area.height - f32(t) * plot_area.height
+
+		rl.DrawLine(
+			i32(plot_area.x),
+			i32(sy),
+			i32(plot_area.x + plot_area.width),
+			i32(sy),
+			theme.grid,
+		)
+		rl.DrawLine(
+			i32(sx),
+			i32(plot_area.y),
+			i32(sx),
+			i32(plot_area.y + plot_area.height),
+			theme.grid,
+		)
+
+		x_lbl := strings.clone_to_cstring(fmt.tprintf(fmt_spec, gx), context.temp_allocator)
+		y_lbl := strings.clone_to_cstring(fmt.tprintf(fmt_spec, gy), context.temp_allocator)
+		draw_text(
+			x_lbl,
+			i32(sx - 20 * sc),
+			i32(plot_area.y + plot_area.height + 2 * sc),
+			font_size - 2,
+			theme.text,
+		)
+		draw_text(y_lbl, i32(plot_area.x - 60 * sc), i32(sy - 8 * sc), font_size - 2, theme.text)
+	}
+}
+
 // Draws the horizontal x-axis label and the rotated y-axis label under/left of
 // the plot area. Shared by every plot widget.
 draw_plot_axis_labels :: proc(
@@ -1091,39 +1169,7 @@ plot_series :: proc(
 	y_range := y_max - y_min
 
 	// Grid
-	for i := 0; i <= 4; i += 1 {
-		t := f64(i) / 4.0
-		gx := x_min + t * x_range
-		gy := y_min + t * y_range
-		sx := plot_area.x + f32((gx - x_min) / x_range) * plot_area.width
-		sy := plot_area.y + plot_area.height - f32((gy - y_min) / y_range) * plot_area.height
-
-		rl.DrawLine(
-			i32(plot_area.x),
-			i32(sy),
-			i32(plot_area.x + plot_area.width),
-			i32(sy),
-			theme.grid,
-		)
-		rl.DrawLine(
-			i32(sx),
-			i32(plot_area.y),
-			i32(sx),
-			i32(plot_area.y + plot_area.height),
-			theme.grid,
-		)
-
-		x_lbl := strings.clone_to_cstring(fmt.tprintf("%.2f", gx), context.temp_allocator)
-		y_lbl := strings.clone_to_cstring(fmt.tprintf("%.2f", gy), context.temp_allocator)
-		draw_text(
-			x_lbl,
-			i32(sx - 20 * sc),
-			i32(plot_area.y + plot_area.height + 2 * sc),
-			font_size - 2,
-			theme.text,
-		)
-		draw_text(y_lbl, i32(plot_area.x - 60 * sc), i32(sy - 8 * sc), font_size - 2, theme.text)
-	}
+	draw_cartesian_grid_and_ticks(plot_area, x_min, y_min, x_range, y_range, theme, font_size, sc)
 
 	// Axis labels
 	draw_plot_axis_labels(rect, plot_area, x_label, y_label, theme, font_size, sc)
@@ -1601,15 +1647,19 @@ histogram_auto_bins :: proc(values: []f32) -> int {
 	return clamp(n_bins, 1, 200)
 }
 
-// Draws a small bin-count stepper (`- N +`) in the top-right corner of the
-// histogram. `bins` is the live value (0 = auto). Mutates `bins` when the
-// +/- buttons are pressed.
-histogram_bin_stepper :: proc(rect: rl.Rectangle, bins: ^int, theme: Theme, sc: f32, allow_input := true) {
+// Shared `- label +` stepper in the top-right corner of a plot panel. Returns
+// (minus_clicked, plus_clicked).
+draw_plot_stepper :: proc(
+	rect: rl.Rectangle,
+	label: string,
+	theme: Theme,
+	sc: f32,
+	allow_input := true,
+) -> (minus_clicked, plus_clicked: bool) {
 	btn_size := f32(18 * sc)
 	btn_y := rect.y + 2 * sc
 	gap := 2 * sc
 
-	label := fmt.tprintf("%d", bins^) if bins^ > 0 else "auto"
 	label_c := strings.clone_to_cstring(label, context.temp_allocator)
 	label_w := f32(measure_text(label_c, i32(11 * sc))) + 10 * sc
 
@@ -1637,20 +1687,8 @@ histogram_bin_stepper :: proc(rect: rl.Rectangle, bins: ^int, theme: Theme, sc: 
 		return allow_input && hover && rl.IsMouseButtonReleased(.LEFT)
 	}
 
-	if draw_step_btn(minus_rect, "-", theme, sc, allow_input) && bins^ > 0 {
-		if bins^ < 2 {
-			bins^ = 0
-		} else {
-			bins^ -= 1
-		}
-	}
-	if draw_step_btn(plus_rect, "+", theme, sc, allow_input) {
-		if bins^ == 0 {
-			bins^ = 2
-		} else if bins^ < 200 {
-			bins^ += 1
-		}
-	}
+	minus_clicked = draw_step_btn(minus_rect, "-", theme, sc, allow_input)
+	plus_clicked = draw_step_btn(plus_rect, "+", theme, sc, allow_input)
 	draw_fill_rounded(label_rect, theme.bg, 4 * sc)
 	draw_stroke_rounded(label_rect, theme.border, 4 * sc, 1)
 	draw_text(
@@ -1660,6 +1698,25 @@ histogram_bin_stepper :: proc(rect: rl.Rectangle, bins: ^int, theme: Theme, sc: 
 		i32(11 * sc),
 		theme.text,
 	)
+	return
+}
+
+// Draws a small bin-count stepper (`- N +`) in the top-right corner of the
+// histogram. `bins` is the live value (0 = auto). Mutates `bins` when the
+// +/- buttons are pressed.
+histogram_bin_stepper :: proc(rect: rl.Rectangle, bins: ^int, theme: Theme, sc: f32, allow_input := true) {
+	label := fmt.tprintf("%d", bins^) if bins^ > 0 else "auto"
+	minus, plus := draw_plot_stepper(rect, label, theme, sc, allow_input)
+	if minus && bins^ > 0 {
+		bins^ = 0 if bins^ < 2 else bins^ - 1
+	}
+	if plus {
+		if bins^ == 0 {
+			bins^ = 2
+		} else if bins^ < 200 {
+			bins^ += 1
+		}
+	}
 }
 
 plot_histogram :: proc(
@@ -2037,38 +2094,7 @@ plot_histogram_2d :: proc(
 	draw_plot_axis_labels(rect, plot_area, x_label, y_label, theme, font_size, sc)
 
 	// colorbar legend
-	bar_x := rect.x + rect.width - 30 * sc
-	bar := rl.Rectangle{bar_x, plot_area.y, 10 * sc, plot_area.height}
-	for iy in 0 ..< int(bar.height) {
-		t := 1 - f32(iy) / bar.height
-		col := color_lerp(theme.axis_x, theme.axis_z, t)
-		rl.DrawLine(
-			i32(bar.x),
-			i32(bar.y + f32(iy)),
-			i32(bar.x + bar.width),
-			i32(bar.y + f32(iy)),
-			col,
-		)
-	}
-	rl.DrawRectangleLinesEx(bar, 1, theme.border)
-	top_lbl := strings.clone_to_cstring(fmt.tprintf("%d", max_count), context.temp_allocator)
-	bot_lbl := strings.clone_to_cstring(fmt.tprintf("0"), context.temp_allocator)
-	top_w := f32(measure_text(top_lbl, font_size - 2))
-	bot_w := f32(measure_text(bot_lbl, font_size - 2))
-	draw_text(
-		top_lbl,
-		i32(bar.x + bar.width * 0.5 - top_w * 0.5),
-		i32(bar.y - 14 * sc),
-		font_size - 2,
-		theme.text,
-	)
-	draw_text(
-		bot_lbl,
-		i32(bar.x + bar.width * 0.5 - bot_w * 0.5),
-		i32(bar.y + bar.height + 2 * sc),
-		font_size - 2,
-		theme.text,
-	)
+	draw_plot_colorbar(rect, plot_area, 0, f64(max_count), "", theme, font_size, sc)
 
 	// hover tooltip
 	if !app.exporting && hover_ix >= 0 {

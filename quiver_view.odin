@@ -158,18 +158,7 @@ draw_quiver_view :: proc(
 
 	// Render the 3D scene into an offscreen target sized to the plot rect, then
 	// blit it (same approach as the mesh viewer).
-	dpi := rl.GetWindowScaleDPI()
-	px := max(dpi.x, dpi.y, 1.0)
-	w := c.int(max(rect.width * px, 1))
-	h := c.int(max(rect.height * px, 1))
-	if mv.rt.id == 0 || mv.rt_w != w || mv.rt_h != h {
-		if mv.rt.id != 0 {
-			rl.UnloadRenderTexture(mv.rt)
-		}
-		mv.rt = rl.LoadRenderTexture(w, h)
-		mv.rt_w = w
-		mv.rt_h = h
-	}
+	mesh_view_ensure_rt(mv, rect)
 
 	mag_lo, mag_hi, mag_ok := quiver3d_magnitude_range(arrows)
 
@@ -215,8 +204,7 @@ draw_quiver_view :: proc(
 	rl.EndTextureMode()
 
 	// Blit the (vertically flipped) render texture into the plot rect.
-	src := rl.Rectangle{0, 0, f32(mv.rt.texture.width), -f32(mv.rt.texture.height)}
-	rl.DrawTexturePro(mv.rt.texture, src, rect, rl.Vector2{0, 0}, 0, rl.WHITE)
+	mesh_view_blit_rt(mv, rect)
 
 	// Axis labels over the blitted scene.
 	if bounds_ok {

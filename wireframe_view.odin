@@ -93,18 +93,7 @@ draw_wireframe_view :: proc(
 	diag := v3_len(v3_sub(rl.Vector3{f32(maxp[0]), f32(maxp[1]), f32(maxp[2])}, axis_origin))
 	axis_len := max(diag * 0.2, 0.1)
 
-	dpi := rl.GetWindowScaleDPI()
-	px := max(dpi.x, dpi.y, 1.0)
-	w := c.int(max(rect.width * px, 1))
-	h := c.int(max(rect.height * px, 1))
-	if mv.rt.id == 0 || mv.rt_w != w || mv.rt_h != h {
-		if mv.rt.id != 0 {
-			rl.UnloadRenderTexture(mv.rt)
-		}
-		mv.rt = rl.LoadRenderTexture(w, h)
-		mv.rt_w = w
-		mv.rt_h = h
-	}
+	mesh_view_ensure_rt(mv, rect)
 
 	rl.BeginTextureMode(mv.rt)
 	rl.ClearBackground(theme.window_bg)
@@ -114,8 +103,7 @@ draw_wireframe_view :: proc(
 	rl.EndMode3D()
 	rl.EndTextureMode()
 
-	src := rl.Rectangle{0, 0, f32(mv.rt.texture.width), -f32(mv.rt.texture.height)}
-	rl.DrawTexturePro(mv.rt.texture, src, rect, rl.Vector2{0, 0}, 0, rl.WHITE)
+	mesh_view_blit_rt(mv, rect)
 	draw_3d_axis_labels(cam, axis_origin, axis_len, mv.rt.texture.width, mv.rt.texture.height, rect, sc)
 
 	// Overlay: title, reset view, and control hint.

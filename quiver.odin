@@ -238,39 +238,7 @@ plot_quiver :: proc(
 	y_range := y_max - y_min
 
 	// Grid + tick labels.
-	for i := 0; i <= 4; i += 1 {
-		t := f64(i) / 4.0
-		gx := x_min + t * x_range
-		gy := y_min + t * y_range
-		sx := plot_area.x + f32((gx - x_min) / x_range) * plot_area.width
-		sy := plot_area.y + plot_area.height - f32((gy - y_min) / y_range) * plot_area.height
-
-		rl.DrawLine(
-			i32(plot_area.x),
-			i32(sy),
-			i32(plot_area.x + plot_area.width),
-			i32(sy),
-			theme.grid,
-		)
-		rl.DrawLine(
-			i32(sx),
-			i32(plot_area.y),
-			i32(sx),
-			i32(plot_area.y + plot_area.height),
-			theme.grid,
-		)
-
-		x_lbl := strings.clone_to_cstring(fmt.tprintf("%.2f", gx), context.temp_allocator)
-		y_lbl := strings.clone_to_cstring(fmt.tprintf("%.2f", gy), context.temp_allocator)
-		draw_text(
-			x_lbl,
-			i32(sx - 20 * sc),
-			i32(plot_area.y + plot_area.height + 2 * sc),
-			font_size - 2,
-			theme.text,
-		)
-		draw_text(y_lbl, i32(plot_area.x - 60 * sc), i32(sy - 8 * sc), font_size - 2, theme.text)
-	}
+	draw_cartesian_grid_and_ticks(plot_area, x_min, y_min, x_range, y_range, theme, font_size, sc)
 
 	draw_plot_axis_labels(rect, plot_area, x_label, y_label, theme, font_size, sc)
 
@@ -448,51 +416,11 @@ QUIVER_SCALE_STEP :: 1.5
 // (mirrors the histogram bin stepper). Multiplicative steps: + scales up by
 // QUIVER_SCALE_STEP, − down by the same amount. Mutates `scale`.
 quiver_scale_stepper :: proc(rect: rl.Rectangle, scale: ^f32, theme: Theme, sc: f32, allow_input := true) {
-	btn_size := f32(18 * sc)
-	btn_y := rect.y + 2 * sc
-	gap := 2 * sc
-
-	label := fmt.tprintf("%g×", scale^)
-	label_c := strings.clone_to_cstring(label, context.temp_allocator)
-	label_w := f32(measure_text(label_c, i32(11 * sc))) + 10 * sc
-
-	total_w := btn_size * 3 + label_w + gap * 4
-	right := rect.x + rect.width - 76 * sc
-
-	minus_rect := rl.Rectangle{right - total_w, btn_y, btn_size, btn_size}
-	label_rect := rl.Rectangle{minus_rect.x + minus_rect.width + gap, btn_y, label_w, btn_size}
-	plus_rect := rl.Rectangle{label_rect.x + label_rect.width + gap, btn_y, btn_size, btn_size}
-
-	draw_step_btn :: proc(r: rl.Rectangle, sym: cstring, theme: Theme, sc: f32, allow_input: bool) -> bool {
-		mouse := rl.GetMousePosition()
-		hover := rl.CheckCollisionPointRec(mouse, r)
-		radius := 4 * sc
-		draw_fill_rounded(r, theme.hover if hover else theme.bg, radius)
-		draw_stroke_rounded(r, theme.border, radius, 1)
-		tw := f32(measure_text(sym, i32(11 * sc)))
-		draw_text(
-			sym,
-			i32(r.x + (r.width - tw) * 0.5),
-			i32(r.y + (r.height - 11 * sc) * 0.5),
-			i32(11 * sc),
-			theme.text,
-		)
-		return allow_input && hover && rl.IsMouseButtonReleased(.LEFT)
-	}
-
-	if draw_step_btn(minus_rect, "-", theme, sc, allow_input) {
+	minus, plus := draw_plot_stepper(rect, fmt.tprintf("%g×", scale^), theme, sc, allow_input)
+	if minus {
 		scale^ = clamp(scale^ / QUIVER_SCALE_STEP, QUIVER_SCALE_MIN, QUIVER_SCALE_MAX)
 	}
-	if draw_step_btn(plus_rect, "+", theme, sc, allow_input) {
+	if plus {
 		scale^ = clamp(scale^ * QUIVER_SCALE_STEP, QUIVER_SCALE_MIN, QUIVER_SCALE_MAX)
 	}
-	draw_fill_rounded(label_rect, theme.bg, 4 * sc)
-	draw_stroke_rounded(label_rect, theme.border, 4 * sc, 1)
-	draw_text(
-		label_c,
-		i32(label_rect.x + (label_rect.width - label_w) * 0.5 + 4 * sc),
-		i32(label_rect.y + (label_rect.height - 11 * sc) * 0.5),
-		i32(11 * sc),
-		theme.text,
-	)
 }
