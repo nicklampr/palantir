@@ -69,6 +69,48 @@ test_axis_equal_palette_command :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_fit_plot_to_screen_palette_command :: proc(t: ^testing.T) {
+	sync.mutex_lock(&global_app_test_mutex)
+	defer sync.mutex_unlock(&global_app_test_mutex)
+	default_app = {}
+	defer default_app = {}
+	app := &default_app
+	palette_init(&app.palette, gui_commands[:], on_palette_select)
+	defer palette_destroy(&app.palette)
+
+	found := false
+	for cmd, i in gui_commands {
+		if GuiCommand(uintptr(cmd.user_data)) != .fit_plot_to_screen {
+			continue
+		}
+		found = true
+		plot_ids := [?]int{PLOT_LINE, PLOT_SCATTER, PLOT_HIST2D, PLOT_QUIVER, PLOT_CONTOUR}
+		equal_modes := [?]bool{true, false}
+		for plot_id in plot_ids {
+			app.results.plot.id = plot_id
+			for axis_equal in equal_modes {
+				app.results.plot.axis_equal = axis_equal
+				state := &app.results.plot_zoom[plot_id]
+				_, _, _, _ = plot_zoom_update(state, 0, 10, 0, 20, 0.5, 0.5, 2, false)
+				state.preserve_on_base_change = true
+				app.results.plot_zoom[PLOT_HIST] = {initialized = true, x_min = 3, x_max = 7}
+				palette_open_it(&app.palette)
+				palette_activate(&app.palette, i)
+
+				testing.expect(t, !app.results.plot.axis_equal && !app.palette.open, "fit disables equal axes and closes the palette")
+				testing.expect(t, !state.preserve_on_base_change, "explicit fit overrides refresh preservation")
+				x0, x1, y0, y1 := plot_zoom_update(state, 0, 10, 0, 20, 0.5, 0.5, 0, false)
+				testing.expect(t, x0 == 0 && x1 == 10 && y0 == 0 && y1 == 20, "fit restores independent full-data bounds even when equal axes were already off")
+				other := app.results.plot_zoom[PLOT_HIST]
+				testing.expect(t, other.initialized && other.x_min == 3 && other.x_max == 7, "fit leaves other plots' zoom unchanged")
+			}
+		}
+		break
+	}
+	testing.expect(t, found, "fit plot to screen is in the command palette")
+}
+
+@(test)
 test_panel_visibility_settings :: proc(t: ^testing.T) {
 	defaults := default_settings()
 	testing.expect(t, !defaults.left_panel_hidden && !defaults.bottom_panel_hidden, "panels are visible with older settings")

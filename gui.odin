@@ -235,6 +235,7 @@ GuiCommand :: enum {
 	find_files,
 	refresh_plots,
 	toggle_axis_equal,
+	fit_plot_to_screen,
 	show_walkthrough,
 	toggle_font,
 	toggle_left_panel,
@@ -303,6 +304,11 @@ gui_commands := [?]Palette_Command {
 		name = "Toggle axis equal",
 		description = "match X and Y data units on 2D Cartesian plots",
 		user_data = rawptr(uintptr(GuiCommand.toggle_axis_equal)),
+	},
+	{
+		name = "Fit plot to screen",
+		description = "disable axis equal and reset zoom on the current Cartesian 2D plot",
+		user_data = rawptr(uintptr(GuiCommand.fit_plot_to_screen)),
 	},
 	{
 		name = "Toggle left panel",
@@ -632,6 +638,13 @@ on_palette_select :: proc(cmd: Palette_Command) {
 		_ = toggle_app_font()
 	case .toggle_axis_equal:
 		default_app.results.plot.axis_equal = !default_app.results.plot.axis_equal
+		save_settings(&default_app)
+	case .fit_plot_to_screen:
+		rs := &default_app.results
+		rs.plot.axis_equal = false
+		if plot_supports_axis_equal(rs.plot.id) {
+			rs.plot_zoom[rs.plot.id] = {}
+		}
 		save_settings(&default_app)
 	case .toggle_left_panel:
 		results_toggle_left_panel(&default_app)

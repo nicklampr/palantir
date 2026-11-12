@@ -29,6 +29,9 @@ to switch plots automatically. Run `palantir --help` for the full option list.
 For an in-app guide to controls and shortcuts, press `Ctrl+Shift+P` and select
 **App walkthrough** from the command palette.
 
+Select **Fit plot to screen** in the command palette to turn off equal-axis
+scaling and reset the current Cartesian 2D plot's zoom to the full data bounds.
+
 The compressed Natural Earth map background is embedded in the executable.
 It is decoded and uploaded only when the Map plot is opened; no external image
 file is needed at runtime.
